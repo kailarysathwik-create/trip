@@ -10,7 +10,7 @@ from typing import List, Optional, Dict, Any
 import uuid
 from datetime import datetime, timezone, timedelta
 import httpx
-from openai import OpenAI
+from groq import Groq
 from supabase import create_client, Client
 
 ROOT_DIR = Path(__file__).parent
@@ -18,7 +18,10 @@ load_dotenv(ROOT_DIR / '.env')
 
 # Supabase connection — use env vars, fall back to known project values
 SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://bitpovthujinbitxgiys.supabase.co')
-SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
+SUPABASE_SERVICE_KEY = os.environ.get(
+    'SUPABASE_SERVICE_KEY',
+    'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImJpdHBvdnRodWppbmJpdHhnaXlzIiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc3NDg2MzMxMCwiZXhwIjoyMDkwNDM5MzEwfQ.4h-7jwLLw0RFssccyKA57KA-wrt-wPt3zFZsObBiTis'
+)
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
 
 # Create the main app without a prefix
@@ -351,14 +354,14 @@ Return ONLY a JSON array with exactly {details['num_days']} objects:
 CRITICAL REMINDER: Array must contain EXACTLY {details['num_days']} day objects. Return ONLY the JSON array, no other text."""
     
     try:
-        # Initialize OpenAI client
-        client = OpenAI(
-            api_key=os.environ.get('OPENAI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '')
+        # Initialize Groq client
+        client = Groq(
+            api_key=os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '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')
         )
         
-        # Get AI response using standard OpenAI library
+        # Get AI response using Groq library
         completion = client.chat.completions.create(
-            model="gpt-4o",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": "You are a professional travel planner. Return only valid JSON without markdown formatting."},
                 {"role": "user", "content": prompt}
@@ -436,12 +439,12 @@ Return as JSON array:
 Use REAL Indian transport data and realistic INR pricing."""
     
     try:
-        client = OpenAI(
-            api_key=os.environ.get('OPENAI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
+        client = Groq(
+            api_key=os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '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')
         )
         
         completion = client.chat.completions.create(
-            model="gpt-4o",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": "You are a travel booking assistant. Return only valid JSON without markdown formatting."},
                 {"role": "user", "content": prompt}
@@ -536,12 +539,12 @@ Return as JSON array:
 Use REAL data for {details['destination']} with accurate INR pricing."""
     
     try:
-        client = OpenAI(
-            api_key=os.environ.get('OPENAI_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
+        client = Groq(
+            api_key=os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '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')
         )
         
         completion = client.chat.completions.create(
-            model="gpt-4o",
+            model="llama-3.3-70b-versatile",
             messages=[
                 {"role": "system", "content": "You are a hotel booking assistant. Return only valid JSON without markdown formatting."},
                 {"role": "user", "content": prompt}

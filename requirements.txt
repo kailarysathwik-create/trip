@@ -4,4 +4,4 @@ python-dotenv
 httpx
 supabase
 pydantic
-openai
+groq
