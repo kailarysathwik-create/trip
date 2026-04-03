@@ -313,8 +313,8 @@ async def generate_itinerary(request: Request, trip_id: str):
     details = trip_doc["details"]
     
     # Enrich prompt with actual booking data
-    transport_info = f"Transport: {transport.get('provider')} ({transport.get('type')}) - {transport.get('booking_id')}. Arriving at {transport.get('arrival_time')}." if transport else "Transport: Not specified"
-    stays_info = "Accommodations:\n" + "\n".join([f"- {s.get('hotel_name')} in {s.get('location')} (Check-in: {s.get('check_in')})" for s in stays]) if stays else ""
+    transport_info = f"Transport Hub: {transport.get('type')} - Reference ID: {transport.get('booking_id')}. (Hub AI will optimize arrival timings)." if transport else "Transport Hub: Pending Sync"
+    stays_info = "Hub Sanctuaries:\n" + "\n".join([f"- {s.get('hotel_name')} in {s.get('location')} (Synchronized Hub Check-in: {s.get('check_in')})" for s in stays]) if stays else ""
 
     # Generate itinerary using AI
     prompt = f"""Create a detailed {details['num_days']}-day luxury travel itinerary for {details['from_location']} to {details['destination']}.
@@ -655,9 +655,10 @@ async def confirm_payment(request: Request, trip_id: str):
     
     transaction_id = body.get('transaction_id', '')  # Optional UPI transaction ID
     
-    # Mock Notification Logic
-    logging.info(f"ALERTS: Sending Luxury Plan to Email: {user.email}")
-    logging.info(f"ALERTS: Sending SMS to Phone: {user.phone} (Onboarding Number)")
+    # Mock Notification Logic for Lavender Hub
+    logging.info(f"HUB NOTIFICATION (T-2h): Trip to {trip_doc['details']['destination']} is imminent. Primary Contact: {user.phone or 'Not Provided'} | Email: {user.email}")
+    logging.info(f"HUB NOTIFICATION (T-1h): Departure verification required. Please proceed to the Hub. | Reference: {trip_doc.get('selected_transport') or 'N/A'}")
+    logging.info(f"HUB ALERT: Transport status synchronized. Currently on schedule. No delays detected for Reference: {transaction_id}")
     
     # Update trip as payment completed
     supabase.table('trips').update({
