@@ -314,9 +314,7 @@ async def generate_itinerary(request: Request, trip_id: str):
     
     # Enrich prompt with actual booking data
     transport_info = f"Transport: {transport.get('provider')} ({transport.get('type')}) - {transport.get('booking_id')}. Arriving at {transport.get('arrival_time')}." if transport else "Transport: Not specified"
-    stays_info = "Accommodations:
-" + "
-".join([f"- {s.get('hotel_name')} in {s.get('location')} (Check-in: {s.get('check_in')})" for s in stays]) if stays else ""
+    stays_info = "Accommodations:\n" + "\n".join([f"- {s.get('hotel_name')} in {s.get('location')} (Check-in: {s.get('check_in')})" for s in stays]) if stays else ""
 
     # Generate itinerary using AI
     prompt = f"""Create a detailed {details['num_days']}-day luxury travel itinerary for {details['from_location']} to {details['destination']}.
