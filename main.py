@@ -655,10 +655,10 @@ async def confirm_payment(request: Request, trip_id: str):
     
     transaction_id = body.get('transaction_id', '')  # Optional UPI transaction ID
     
-    # Mock Notification Logic for Lavender Hub
+    # Mock Notification Logic for Purple Hub
     logging.info(f"HUB NOTIFICATION (T-2h): Trip to {trip_doc['details']['destination']} is imminent. Primary Contact: {user.phone or 'Not Provided'} | Email: {user.email}")
     logging.info(f"HUB NOTIFICATION (T-1h): Departure verification required. Please proceed to the Hub. | Reference: {trip_doc.get('selected_transport') or 'N/A'}")
-    logging.info(f"HUB ALERT: Transport status synchronized. Currently on schedule. No delays detected for Reference: {transaction_id}")
+    logging.info(f"HUB ALERT: Transport status synchronized for Purple Hub deployment. Currently on schedule. No delays detected. | Reference: {transaction_id}")
     
     # Update trip as payment completed
     supabase.table('trips').update({
