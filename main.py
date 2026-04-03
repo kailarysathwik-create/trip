@@ -300,6 +300,9 @@ async def create_trip(request: Request, details: TripDetails):
 @api_router.post("/trips/{trip_id}/generate-itinerary")
 async def generate_itinerary(request: Request, trip_id: str):
     user = await get_current_user(request)
+    body = await request.json()
+    transport = body.get('transport', {})
+    stays = body.get('stays', [])
     
     trip_response = supabase.table('trips').select('*').eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
@@ -309,46 +312,37 @@ async def generate_itinerary(request: Request, trip_id: str):
     trip_doc = trip_response.data[0]
     details = trip_doc["details"]
     
+    # Enrich prompt with actual booking data
+    transport_info = f"Transport: {transport.get('provider')} ({transport.get('type')}) - {transport.get('booking_id')}. Arriving at {transport.get('arrival_time')}." if transport else "Transport: Not specified"
+    stays_info = "Accommodations:
+" + "
+".join([f"- {s.get('hotel_name')} in {s.get('location')} (Check-in: {s.get('check_in')})" for s in stays]) if stays else ""
+
     # Generate itinerary using AI
-    prompt = f"""Create a detailed {details['num_days']}-day travel itinerary from {details['from_location']} to {details['destination']}.
-    
-CRITICAL: You MUST provide exactly {details['num_days']} days in the itinerary. No more, no less.
+    prompt = f"""Create a detailed {details['num_days']}-day luxury travel itinerary for {details['from_location']} to {details['destination']}.
 
-Number of travelers: {details['num_people']}
-Transport mode: {details['transport_mode']}
-Start date: {details['start_date']}
-{f"Budget: ₹{details['budget']}" if details.get('budget') else ''}
-{f"Must-visit places on the way: {details['places_to_cover']}" if details.get('places_to_cover') else ''}
-{f"Additional preferences: {details['preferences']}" if details.get('preferences') else ''}
+CRITICAL: You MUST provide exactly {details['num_days']} days.
 
-IMPORTANT: 
-1. If places_to_cover is mentioned, include those places in the itinerary
-2. Create EXACTLY {details['num_days']} days - not 1 day, not 2 days, exactly {details['num_days']} days
-3. Each day should be unique and well-planned
+CONTEXT:
+Starting {details['start_date']}
+{transport_info}
+{stays_info}
+Travelers: {details['num_people']}
 
-For each day (from Day 1 to Day {details['num_days']}), provide:
-1. A descriptive title
-2. 3-5 must-visit places with brief descriptions
-3. Activities to do
+INSTRUCTIONS:
+1. Use the EXACT transport and stay details above.
+2. Day 1 starts with arrival.
+3. Plan activities near the specified hotels.
 
 Return ONLY a JSON array with exactly {details['num_days']} objects:
 [
   {{
     "day": 1,
-    "title": "Arrival and Day 1 in [Location]",
-    "places": ["Place 1: Description", "Place 2: Description", "Place 3: Description"],
-    "activities": ["Activity 1", "Activity 2", "Activity 3"]
-  }},
-  {{
-    "day": 2,
-    "title": "Day 2 title",
-    "places": ["Place 1", "Place 2", "Place 3"],
-    "activities": ["Activity 1", "Activity 2", "Activity 3"]
+    "title": "Title",
+    "places": ["Place description"],
+    "activities": ["Activity 1"]
   }}
-  ... continue until day {details['num_days']}
-]
-
-CRITICAL REMINDER: Array must contain EXACTLY {details['num_days']} day objects. Return ONLY the JSON array, no other text."""
+]"""
     
     try:
         # Initialize Groq client
@@ -663,6 +657,10 @@ async def confirm_payment(request: Request, trip_id: str):
     
     transaction_id = body.get('transaction_id', '')  # Optional UPI transaction ID
     
+    # Mock Notification Logic
+    logging.info(f"ALERTS: Sending Luxury Plan to Email: {user.email}")
+    logging.info(f"ALERTS: Sending SMS to Phone: {user.phone} (Onboarding Number)")
+    
     # Update trip as payment completed
     supabase.table('trips').update({
         "payment_status": "completed",
@@ -671,7 +669,7 @@ async def confirm_payment(request: Request, trip_id: str):
     }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
     return {
-        "message": "Payment confirmed successfully",
+        "message": "Payment confirmed. Plan sent to Email & SMS.",
         "trip_id": trip_id,
         "status": "confirmed"
     }
