@@ -371,6 +371,20 @@ CRITICAL REMINDER: Array must contain EXACTLY {details['num_days']} day objects.
         import json
         itinerary_data = json.loads(response_text)
         
+        # Ensure we have a list of days, even if AI wrapped it in an object
+        if isinstance(itinerary_data, dict):
+            if "days" in itinerary_data:
+                itinerary_data = itinerary_data["days"]
+            elif "itinerary" in itinerary_data:
+                itinerary_data = itinerary_data["itinerary"]
+                if isinstance(itinerary_data, dict) and "days" in itinerary_data:
+                    itinerary_data = itinerary_data["days"]
+
+        if not isinstance(itinerary_data, list):
+            logging.error(f"Unexpected itinerary format from AI: {type(itinerary_data)}")
+            # Fallback to empty list or handle error
+            itinerary_data = []
+
         supabase.table('trips').update({
             "itinerary": {"days": itinerary_data}
         }).eq('trip_id', trip_id).execute()
