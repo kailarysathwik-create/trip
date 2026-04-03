@@ -15,7 +15,7 @@ API_URL = f"{BASE_URL}/api"
 
 # Supabase connection for test data setup
 SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://bitpovthujinbitxgiys.supabase.co')
-SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', 'sb_secret_Iq_7ottLweLVr1iTE3LKKg_dN0xSnQG')
+SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
 
 
 class TestSetup:
