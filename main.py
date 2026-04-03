@@ -141,6 +141,54 @@ async def get_current_user(request: Request) -> User:
 
 # ============ Auth Routes ============
 
+@api_router.post("/auth/login")
+async def login(request: Request):
+    body = await request.json()
+    email = body.get("email")
+    if not email:
+        raise HTTPException(status_code=400, detail="email required")
+    
+    referer = request.headers.get("referer", "http://localhost:3000/")
+    if "localhost" in referer:
+        redirect_to = "http://localhost:3000/auth/callback"
+    else:
+        from urllib.parse import urlparse
+        parsed = urlparse(referer)
+        redirect_to = f"{parsed.scheme}://{parsed.netloc}/auth/callback"
+        
+    try:
+        supabase.auth.sign_in_with_otp({
+            "email": email, 
+            "options": {"email_redirect_to": redirect_to}
+        })
+        return {"success": True, "message": "Magic link sent"}
+    except Exception as e:
+        logging.error(f"OTP login failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to send login link")
+
+@api_router.post("/auth/google")
+async def google_login(request: Request):
+    referer = request.headers.get("referer", "http://localhost:3000/")
+    if "localhost" in referer:
+        redirect_to = "http://localhost:3000/auth/callback"
+    else:
+        from urllib.parse import urlparse
+        parsed = urlparse(referer)
+        redirect_to = f"{parsed.scheme}://{parsed.netloc}/auth/callback"
+        
+    try:
+        res = supabase.auth.sign_in_with_oauth({
+            "provider": "google", 
+            "options": {"redirect_to": redirect_to}
+        })
+        url = getattr(res, 'url', None)
+        if url is None and isinstance(res, dict):
+            url = res.get('url')
+        return {"url": url}
+    except Exception as e:
+        logging.error(f"OAuth redirect failed: {e}")
+        raise HTTPException(status_code=500, detail="Failed to initialize Google login")
+
 @api_router.post("/auth/session")
 async def create_session(request: Request, response: Response):
     body = await request.json()
