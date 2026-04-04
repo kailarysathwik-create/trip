@@ -39,9 +39,9 @@ class User(BaseModel):
     phone: Optional[str] = None
     website: Optional[str] = None
     upi_id: Optional[str] = None
-    agency_charges_percentage: Optional[float] = 0.0
+    agency_charges_percentage: Optional[float] = 10.0
     has_payment_setup: bool = False
-    created_at: str
+    created_at: Optional[str] = None
 
 class OnboardingInput(BaseModel):
     organization: str
@@ -95,14 +95,22 @@ class TouristDetail(BaseModel):
     name: str
     age: int
     gender: str
-    proof: str # Aadhar ID
+    proof: str # Aadhar/Passport ID
 
 class TouristDetailsInput(BaseModel):
     tourists: List[TouristDetail]
     contact_phone: str
     contact_email: Optional[str] = None
-    additional_phones: Optional[List[str]] = None
+    secondary_phone: Optional[str] = None
     agency_charges: Optional[float] = 0.0
+
+class PaymentConfirmInput(BaseModel):
+    transaction_id: str
+    primary_phone: str
+    email: str
+    secondary_phone: Optional[str] = None
+    total_amount: float
+    agency_charge: float
 
 # ============ Auth Helper ============
 
@@ -238,9 +246,11 @@ async def create_session(request: Request, response: Response):
             "user_id": user_id,
             "email": user_data["email"],
             "name": user_data["name"],
+            "picture": user_data.get("picture"),
             "phone": None,
             "organization": None,
             "upi_id": None,
+            "agency_charges_percentage": 10.0,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "has_payment_setup": False
         }
@@ -295,6 +305,20 @@ async def logout(request: Request, response: Response):
 
 # ============ Onboarding Route ============
 
+@api_router.post("/onboarding")
+async def onboarding(request: Request, input: OnboardingInput):
+    user = await get_current_user(request)
+    
+    supabase.table('users').update({
+        "organization": input.organization,
+        "phone": input.phone,
+        "website": input.website,
+        "upi_id": input.upi_id,
+        "has_payment_setup": True
+    }).eq('user_id', user.user_id).execute()
+    
+    return {"success": True}
+
 # ============ Trip Routes ============
 
 @api_router.post("/trips/create")
@@ -311,6 +335,7 @@ async def create_trip(request: Request, details: TripDetails):
         "start_date": details.start_date,
         "num_days": details.num_days,
         "num_people": details.num_people,
+        "transport_mode": details.transport_mode,
         "status": "draft",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -761,7 +786,7 @@ async def get_payment_info(request: Request, trip_id: str):
     }
 
 @api_router.post("/trips/{trip_id}/confirm-payment")
-async def confirm_trip_payment(request: Request, trip_id: str, payload: Dict[str, Any]):
+async def confirm_trip_payment(request: Request, trip_id: str, payload: PaymentConfirmInput):
     user = await get_current_user(request)
     
     # 1. Update Trip Status
@@ -772,12 +797,13 @@ async def confirm_trip_payment(request: Request, trip_id: str, payload: Dict[str
     # 2. Record Payment Detail
     payment_record = {
         "trip_id": trip_id,
-        "transaction_id": payload.get('transaction_id', 'OFFLINE'),
-        "primary_phone": payload.get('primary_phone', 'N/A'),
-        "email": payload.get('email'),
-        "secondary_phone": payload.get('secondary_phone'),
-        "total_amount": payload.get('total_amount', 0.0),
-        "agency_charge": payload.get('agency_charge', 0.0)
+        "transaction_id": payload.transaction_id,
+        "primary_phone": payload.primary_phone,
+        "email": payload.email,
+        "secondary_phone": payload.secondary_phone,
+        "total_amount": payload.total_amount,
+        "agency_charge": payload.agency_charge,
+        "status": "completed"
     }
     
     supabase.table('payments').insert(payment_record).execute()
@@ -818,48 +844,6 @@ async def get_trip(request: Request, trip_id: str):
     
     return trip_response.data[0]
 
-@api_router.post("/onboarding")
-async def onboard_user(request: Request, data: OnboardingInput):
-    user = await get_current_user(request)
-    
-    # Update Supabase user profile
-    result = supabase.table('users').update({
-        "organization": data.organization,
-        "phone": data.phone,
-        "website": data.website,
-        "upi_id": data.upi_id,
-        "has_payment_setup": True
-    }).eq("user_id", user.user_id).execute()
-    
-    return {"message": "Protocol established", "data": result.data}
-
-@api_router.post("/trips/{trip_id}/confirm-payment")
-async def confirm_trip_payment(request: Request, trip_id: str, payload: Dict[str, Any]):
-    user = await get_current_user(request)
-    
-    # 1. Update Trip Status
-    supabase.table('trips').update({
-        "status": "orchestrated"
-    }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
-    
-    # 2. Record Payment Detail in dedicated table
-    payment_record = {
-        "trip_id": trip_id,
-        "transaction_id": payload.get('transaction_id', 'OFFLINE'),
-        "primary_phone": payload.get('primary_phone', 'N/A'),
-        "email": payload.get('email'),
-        "secondary_phone": payload.get('secondary_phone'),
-        "total_amount": payload.get('total_amount', 0.0),
-        "agency_charge": payload.get('agency_charge', 0.0)
-    }
-    
-    supabase.table('payments').insert(payment_record).execute()
-    
-    return {
-        "message": "Settlement Authorized",
-        "trip_id": trip_id,
-        "status": "orchestrated"
-    }
 
 @api_router.post("/trip/send-manifest")
 async def send_trip_manifest(request: Request, payload: Dict[str, Any]):
