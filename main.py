@@ -27,6 +27,17 @@ app = FastAPI()
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
+# ============ Global Exception Handler ============
+
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logging.error(f"UNHANDLED EXCEPTION: {exc}", exc_info=True)
+    return JSONResponse(
+        status_code=500,
+        content={"detail": "Internal Server Error", "msg": str(exc)},
+        headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+    )
+
 # ============ Models ============
 
 class User(BaseModel):
@@ -208,13 +219,19 @@ async def create_session(request: Request, response: Response):
 
     # Verify the Supabase access_token and get the authenticated user
     try:
+        logging.info("Verifying Supabase access token...")
         auth_response = supabase.auth.get_user(access_token)
         supabase_user = auth_response.user
         if not supabase_user:
-            raise Exception("No user returned")
+            logging.error("Supabase user not found for provided token")
+            raise HTTPException(status_code=401, detail="Invalid token session")
     except Exception as e:
         logging.error(f"Supabase token verification failed: {e}")
-        raise HTTPException(status_code=401, detail="Invalid or expired access_token")
+        return JSONResponse(
+            status_code=401, 
+            content={"detail": f"Identity Verification Failed: {str(e)}"},
+            headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+        )
 
     # Extract user info from Supabase user metadata
     user_data = {
@@ -231,39 +248,47 @@ async def create_session(request: Request, response: Response):
     session_token = f"session_{uuid.uuid4().hex}"
     user_id = f"user_{uuid.uuid4().hex[:12]}"
 
-    # Check if user already exists in our users table
-    existing_user_response = supabase.table('users').select('*').eq('email', user_data["email"]).execute()
+    try:
+        # Check if user already exists in our users table
+        existing_user_response = supabase.table('users').select('*').eq('email', user_data["email"]).execute()
 
-    if existing_user_response.data and len(existing_user_response.data) > 0:
-        user_id = existing_user_response.data[0]["user_id"]
-        # Update name/picture in case they changed
-        supabase.table('users').update({
-            "name": user_data["name"],
-            "picture": user_data.get("picture")
-        }).eq('user_id', user_id).execute()
-    else:
-        new_user = {
+        if existing_user_response.data and len(existing_user_response.data) > 0:
+            user_id = existing_user_response.data[0]["user_id"]
+            # Update name/picture in case they changed
+            supabase.table('users').update({
+                "name": user_data["name"],
+                "picture": user_data.get("picture")
+            }).eq('user_id', user_id).execute()
+        else:
+            new_user = {
+                "user_id": user_id,
+                "email": user_data["email"],
+                "name": user_data["name"],
+                "picture": user_data.get("picture"),
+                "phone": None,
+                "organization": None,
+                "upi_id": None,
+                "agency_charges_percentage": 10.0,
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "has_payment_setup": False
+            }
+            supabase.table('users').insert(new_user).execute()
+
+        # Store our session in Supabase
+        session_doc = {
             "user_id": user_id,
-            "email": user_data["email"],
-            "name": user_data["name"],
-            "picture": user_data.get("picture"),
-            "phone": None,
-            "organization": None,
-            "upi_id": None,
-            "agency_charges_percentage": 10.0,
-            "created_at": datetime.now(timezone.utc).isoformat(),
-            "has_payment_setup": False
+            "session_token": session_token,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
+            "created_at": datetime.now(timezone.utc).isoformat()
         }
-        supabase.table('users').insert(new_user).execute()
-
-    # Store our session in Supabase
-    session_doc = {
-        "user_id": user_id,
-        "session_token": session_token,
-        "expires_at": (datetime.now(timezone.utc) + timedelta(days=7)).isoformat(),
-        "created_at": datetime.now(timezone.utc).isoformat()
-    }
-    supabase.table('user_sessions').insert(session_doc).execute()
+        supabase.table('user_sessions').insert(session_doc).execute()
+    except Exception as e:
+        logging.error(f"Database sync failed during session creation: {e}")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Database Synchronization Failed", "msg": str(e)},
+            headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+        )
 
     # Set httpOnly cookie so the browser sends it on every request
     response.set_cookie(
