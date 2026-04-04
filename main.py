@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
 import logging
+import traceback
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
@@ -36,10 +37,12 @@ api_router = APIRouter(prefix="/api")
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logging.error(f"UNHANDLED EXCEPTION: {exc}", exc_info=True)
+    tb = traceback.format_exc()
+    origin = request.headers.get("Origin", "")
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal Server Error", "msg": str(exc)},
-        headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+        content={"detail": "Internal Server Error", "msg": str(exc), "traceback": tb},
+        headers={"Access-Control-Allow-Origin": origin if origin else "https://yash-three-dusky.vercel.app", "Access-Control-Allow-Credentials": "true"}
     )
 
 # ============ Models ============
@@ -228,16 +231,20 @@ async def create_session(request: Request, response: Response):
 
     # Verify the Supabase access_token and get the authenticated user
     try:
+        logging.info("START: Verifying Supabase access token...")
         auth_response = supabase.auth.get_user(access_token)
         supabase_user = auth_response.user
         if not supabase_user:
+            logging.error("CRITICAL: Supabase user not found in auth response object")
             raise HTTPException(status_code=401, detail="Invalid token session")
+        logging.info(f"SUCCESS: Supabase user identified: {supabase_user.email}")
     except Exception as e:
-        logging.error(f"Supabase token verification failed: {e}")
+        tb = traceback.format_exc()
+        logging.error(f"FAIL: Supabase token verification failed: {e}\n{tb}")
         return JSONResponse(
             status_code=401, 
-            content={"detail": "Identity Verification Failed"},
-            headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+            content={"detail": f"Identity Verification Failed: {str(e)}", "trace": tb},
+            headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "https://yash-three-dusky.vercel.app"), "Access-Control-Allow-Credentials": "true"}
         )
 
     # Extract user info from Supabase user metadata
@@ -256,17 +263,18 @@ async def create_session(request: Request, response: Response):
     user_id = f"user_{uuid.uuid4().hex[:12]}"
 
     try:
-        # Check if user already exists in our users table
+        logging.info("DB: Searching for existing user...")
         existing_user_response = supabase.table('users').select('*').eq('email', user_data["email"]).execute()
 
         if existing_user_response.data and len(existing_user_response.data) > 0:
             user_id = existing_user_response.data[0]["user_id"]
-            # Update name/picture in case they changed
+            logging.info(f"DB: User found. Updating profile for {user_id}")
             supabase.table('users').update({
                 "name": user_data["name"],
                 "picture": user_data.get("picture")
             }).eq('user_id', user_id).execute()
         else:
+            logging.info(f"DB: New user. Inserting record for {user_id}")
             new_user = {
                 "user_id": user_id,
                 "email": user_data["email"],
@@ -281,7 +289,7 @@ async def create_session(request: Request, response: Response):
             }
             supabase.table('users').insert(new_user).execute()
 
-        # Store our session in Supabase
+        logging.info("DB: Storing session token...")
         session_doc = {
             "user_id": user_id,
             "session_token": session_token,
@@ -289,12 +297,15 @@ async def create_session(request: Request, response: Response):
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         supabase.table('user_sessions').insert(session_doc).execute()
+        logging.info("DB: Session storage successful")
     except Exception as e:
-        logging.error(f"Database sync failed during session creation: {e}")
+        tb = traceback.format_exc()
+        logging.error(f"FAIL: Database sync failed: {e}\n{tb}")
+        origin = request.headers.get("Origin", "https://yash-three-dusky.vercel.app")
         return JSONResponse(
             status_code=500,
-            content={"detail": "Database Synchronization Failed", "msg": str(e)},
-            headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+            content={"detail": "Database Synchronization Failed", "msg": str(e), "traceback": tb},
+            headers={"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true"}
         )
 
     # Set httpOnly cookie so the browser sends it on every request
