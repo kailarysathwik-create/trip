@@ -361,32 +361,52 @@ async def generate_itinerary(request: Request, trip_id: str):
     details = trip_doc["details"]
     
     # Enrich prompt with actual booking data
-    transport_info = f"Transport Hub: {transport.get('type')} - Reference ID: {transport.get('booking_id')}. (Hub AI will optimize arrival timings)." if transport else "Transport Hub: Pending Sync"
-    stays_info = "Hub Sanctuaries:\n" + "\n".join([f"- {s.get('hotel_name')} in {s.get('location')} (Synchronized Hub Check-in: {s.get('check_in')})" for s in stays]) if stays else ""
+    transport_info = ""
+    stays_info = ""
+    
+    # Pull saved transport and stay selections from DB
+    selected_transport = trip_doc.get("selected_transport", {})
+    selected_stays = trip_doc.get("selected_stays", {})
+    transport_options = trip_doc.get("transport_options", [])
+    stay_options = trip_doc.get("stay_options", [])
+    
+    if transport_options:
+        t = transport_options[0] if isinstance(transport_options, list) else {}
+        transport_info = f"Arriving via {t.get('provider', 'transport')} from {details['from_location']}, arriving at {t.get('to_location', details['destination'])} at {t.get('arrival_time', 'morning')}."
+    
+    if stay_options:
+        stays_list = stay_options if isinstance(stay_options, list) else []
+        stays_info = "Accommodation:\n" + "\n".join([f"- {s.get('name', 'Hotel')} in {s.get('location', details['destination'])}" for s in stays_list[:3]])
 
     # Generate itinerary using AI
-    prompt = f"""Create a detailed {details['num_days']}-day luxury travel itinerary for {details['from_location']} to {details['destination']}.
+    prompt = f"""Create a detailed {details['num_days']}-day travel itinerary for a trip to {details['destination']}.
 
-CRITICAL: You MUST provide exactly {details['num_days']} days.
+CRITICAL RULES:
+1. You MUST provide exactly {details['num_days']} days.
+2. {details['from_location']} is ONLY the starting/departure city. Do NOT plan any sightseeing or activities in {details['from_location']}.
+3. Day 1 begins with arrival at {details['destination']}. Plan all activities ONLY at/around {details['destination']}.
+4. The last day should include departure back to {details['from_location']}.
+5. Use the transport and stay details below when planning.
 
 CONTEXT:
-Starting {details['start_date']}
-{transport_info}
-{stays_info}
-Travelers: {details['num_people']}
+- Start Date: {details['start_date']}
+- Travelers: {details['num_people']} person(s)
+- {transport_info}
+- {stays_info}
+{f"- Places to cover: {details.get('places_to_cover', '')}" if details.get('places_to_cover') else ""}
 
 INSTRUCTIONS:
-1. Use the EXACT transport and stay details above.
-2. Day 1 starts with arrival.
-3. Plan activities near the specified hotels.
+- Include REAL tourist attractions, restaurants, and local experiences in {details['destination']}.
+- Morning, afternoon, and evening activities for each day.
+- Include estimated costs and timings where possible.
 
 Return ONLY a JSON array with exactly {details['num_days']} objects:
 [
   {{
     "day": 1,
-    "title": "Title",
-    "places": ["Place description"],
-    "activities": ["Activity 1"]
+    "title": "Arrival & First Impressions",
+    "places": ["Real Place 1", "Real Place 2"],
+    "activities": ["Arrive at destination", "Check into hotel", "Visit local market"]
   }}
 ]"""
     
@@ -459,35 +479,52 @@ async def generate_transport(request: Request, trip_id: str):
     trip_doc = trip_response.data[0]
     details = trip_doc["details"]
     
-    # Generate realistic mock transport options (structured for easy API replacement later)
-    prompt = f"""Generate 3-4 realistic {details['transport_mode']} options from {details['from_location']} to {details['destination']} starting on {details['start_date']}.
+    # Generate realistic transport options with ALL classes
+    transport_mode = details['transport_mode']
+    
+    if transport_mode == 'train':
+        class_instructions = """For EACH train, generate SEPARATE entries for each available class:
+- Sleeper (SL) - cheapest
+- Third AC (3A) - mid-range  
+- Second AC (2A) - premium
+- First AC (1A) - luxury
+Each class should be a separate entry with its own realistic price per person."""
+    elif transport_mode == 'flight':
+        class_instructions = """For EACH flight, generate SEPARATE entries for each available class:
+- Economy - standard
+- Premium Economy - mid-range (if available on this route)
+- Business - premium
+Each class should be a separate entry with its own realistic price per person."""
+    else:
+        class_instructions = "For cabs, show different vehicle types: Sedan, SUV, Tempo Traveller with realistic pricing."
 
-IMPORTANT: Provide REAL and ACCURATE Indian transport details:
-- For trains: Use actual train names, numbers, and realistic timings for this route
-- For flights: Use actual airline names and realistic flight timings
-- For buses: Use actual bus operators for this route
+    prompt = f"""Generate realistic {transport_mode} options from {details['from_location']} to {details['destination']} on {details['start_date']}.
 
-For each option provide:
-- Type (same as {details['transport_mode']})
-- From and to locations (use actual {details['from_location']} to {details['destination']})
-- Departure and arrival times (realistic based on start date {details['start_date']})
-- Price in INR (base price per person - realistic Indian pricing)
-- Provider name (actual provider for this route)
+CRITICAL RULES:
+1. Use REAL train names/numbers, airline names, or cab operators that actually operate on this route in India.
+2. Use REALISTIC 2024-2025 Indian pricing per person for each class.
+3. If there is NO direct {transport_mode} from {details['from_location']} to {details['destination']}, then find the NEAREST major city/station/airport to {details['destination']} that has direct {transport_mode} service from {details['from_location']}. Mention this in the to_location field.
+4. {details['from_location']} is ONLY the departure point. Do NOT plan any activities there.
 
-Return as JSON array:
+{class_instructions}
+
+Return JSON array with 6-10 entries (multiple classes per service):
 [
   {{
-    "type": "{details['transport_mode']}",
+    "type": "{transport_mode}",
+    "provider": "Actual Name/Number e.g. Rajdhani Express 12301",
+    "class": "Class name e.g. 3A or Economy",
     "from_location": "{details['from_location']}",
-    "to_location": "{details['destination']}",
-    "departure_time": "YYYY-MM-DD HH:MM",
+    "to_location": "Actual destination station/airport (or nearest if no direct route)",
+    "departure_time": "{details['start_date']} HH:MM",
     "arrival_time": "YYYY-MM-DD HH:MM",
+    "duration": "Xh Ym",
     "price": 1500.00,
-    "provider": "Actual Provider Name"
+    "seats_hint": "Available/RAC/WL"
   }}
 ]
 
-Use REAL Indian transport data and realistic INR pricing."""
+Use ONLY real data. Prices must be per person in INR."""
     
     try:
         client = Groq(
