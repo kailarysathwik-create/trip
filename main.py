@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
 import os
 import logging
+import traceback
 from pathlib import Path
 from pydantic import BaseModel, Field, ConfigDict
 from typing import List, Optional, Dict, Any
@@ -36,10 +37,12 @@ api_router = APIRouter(prefix="/api")
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     logging.error(f"UNHANDLED EXCEPTION: {exc}", exc_info=True)
+    tb = traceback.format_exc()
+    origin = request.headers.get("Origin", "")
     return JSONResponse(
         status_code=500,
-        content={"detail": "Internal Server Error", "msg": str(exc)},
-        headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+        content={"detail": "Internal Server Error", "msg": str(exc), "traceback": tb},
+        headers={"Access-Control-Allow-Origin": origin if origin else "https://yash-three-dusky.vercel.app", "Access-Control-Allow-Credentials": "true"}
     )
 
 # ============ Models ============
@@ -228,18 +231,20 @@ async def create_session(request: Request, response: Response):
 
     # Verify the Supabase access_token and get the authenticated user
     try:
-        logging.info("Verifying Supabase access token...")
+        logging.info("START: Verifying Supabase access token...")
         auth_response = supabase.auth.get_user(access_token)
         supabase_user = auth_response.user
         if not supabase_user:
-            logging.error("Supabase user not found for provided token")
+            logging.error("CRITICAL: Supabase user not found in auth response object")
             raise HTTPException(status_code=401, detail="Invalid token session")
+        logging.info(f"SUCCESS: Supabase user identified: {supabase_user.email}")
     except Exception as e:
-        logging.error(f"Supabase token verification failed: {e}")
+        tb = traceback.format_exc()
+        logging.error(f"FAIL: Supabase token verification failed: {e}\n{tb}")
         return JSONResponse(
             status_code=401, 
-            content={"detail": f"Identity Verification Failed: {str(e)}"},
-            headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+            content={"detail": f"Identity Verification Failed: {str(e)}", "trace": tb},
+            headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "https://yash-three-dusky.vercel.app"), "Access-Control-Allow-Credentials": "true"}
         )
 
     # Extract user info from Supabase user metadata
