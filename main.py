@@ -234,19 +234,15 @@ async def create_session(request: Request, response: Response):
             "picture": user_data.get("picture")
         }).eq('user_id', user_id).execute()
     else:
-        # Create new user record
         new_user = {
             "user_id": user_id,
             "email": user_data["email"],
             "name": user_data["name"],
-            "picture": user_data.get("picture"),
-            "organization": None,
             "phone": None,
-            "website": None,
+            "organization": None,
             "upi_id": None,
-            "agency_charges_percentage": 10.0,
-            "has_payment_setup": False,
-            "created_at": datetime.now(timezone.utc).isoformat()
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "has_payment_setup": False
         }
         supabase.table('users').insert(new_user).execute()
 
@@ -310,17 +306,11 @@ async def create_trip(request: Request, details: TripDetails):
     trip_doc = {
         "trip_id": trip_id,
         "user_id": user.user_id,
-        "details": details.model_dump(),
-        "itinerary": None,
-        "transport_options": None,
-        "selected_transport": None,
-        "stay_options": None,
-        "selected_stays": None,
-        "checkout_plans": None,
-        "selected_plan": None,
-        "tourist_details": None,
-        "payment_status": "pending",
-        "payment_id": None,
+        "from_location": details.from_location,
+        "destination": details.destination,
+        "start_date": details.start_date,
+        "num_days": details.num_days,
+        "num_people": details.num_people,
         "status": "draft",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
@@ -716,16 +706,29 @@ async def select_stays(request: Request, trip_id: str):
 async def save_tourist_details(request: Request, trip_id: str, input: TouristDetailsInput):
     user = await get_current_user(request)
     
-    details_data = input.model_dump()
-    
-    result = supabase.table('trips').update({
-        "tourist_details": details_data
-    }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
-    
-    if not result.data or len(result.data) == 0:
+    # Verify trip ownership
+    trip_res = supabase.table('trips').select('trip_id').eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
+    if not trip_res.data:
         raise HTTPException(status_code=404, detail="Trip not found")
+
+    # Clear existing passengers for this trip if any
+    supabase.table('passengers').delete().eq('trip_id', trip_id).execute()
+
+    # Bulk insert new passengers
+    passenger_records = []
+    for t in input.tourists:
+        passenger_records.append({
+            "trip_id": trip_id,
+            "name": t.name,
+            "age": t.age,
+            "gender": t.gender,
+            "proof": t.proof
+        })
     
-    return {"message": "Tourist details saved"}
+    if passenger_records:
+        supabase.table('passengers').insert(passenger_records).execute()
+    
+    return {"message": "Explorer Matrix Synchronized"}
 
 # ============ Payment Routes ============
 
@@ -758,29 +761,31 @@ async def get_payment_info(request: Request, trip_id: str):
     }
 
 @api_router.post("/trips/{trip_id}/confirm-payment")
-async def confirm_payment(request: Request, trip_id: str):
-    """Customer confirms they have paid via UPI"""
+async def confirm_trip_payment(request: Request, trip_id: str, payload: Dict[str, Any]):
     user = await get_current_user(request)
-    body = await request.json()
     
-    transaction_id = body.get('transaction_id', '')  # Optional UPI transaction ID
-    
-    # Mock Notification Logic for Lavender Hub
-    logging.info(f"HUB NOTIFICATION (T-2h): Trip to {trip_doc['details']['destination']} is imminent. Primary Contact: {user.phone or 'Not Provided'} | Email: {user.email}")
-    logging.info(f"HUB NOTIFICATION (T-1h): Departure verification required. Please proceed to the Hub. | Reference: {trip_doc.get('selected_transport') or 'N/A'}")
-    logging.info(f"HUB ALERT: Transport status synchronized for Lavender Hub deployment. Currently on schedule. No delays detected. | Reference: {transaction_id}")
-    
-    # Update trip as payment completed
+    # 1. Update Trip Status
     supabase.table('trips').update({
-        "payment_status": "completed",
-        "payment_id": transaction_id,
-        "status": "confirmed"
+        "status": "orchestrated"
     }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
-    return {
-        "message": "Payment confirmed. Plan sent to Email & SMS.",
+    # 2. Record Payment Detail
+    payment_record = {
         "trip_id": trip_id,
-        "status": "confirmed"
+        "transaction_id": payload.get('transaction_id', 'OFFLINE'),
+        "primary_phone": payload.get('primary_phone', 'N/A'),
+        "email": payload.get('email'),
+        "secondary_phone": payload.get('secondary_phone'),
+        "total_amount": payload.get('total_amount', 0.0),
+        "agency_charge": payload.get('agency_charge', 0.0)
+    }
+    
+    supabase.table('payments').insert(payment_record).execute()
+    
+    return {
+        "message": "Settlement Authorized",
+        "trip_id": trip_id,
+        "status": "orchestrated"
     }
 
 @api_router.post("/trips/{trip_id}/finalize")
@@ -792,12 +797,6 @@ async def finalize_trip(request: Request, trip_id: str):
     if not trip_response.data or len(trip_response.data) == 0:
         raise HTTPException(status_code=404, detail="Trip not found")
     
-    trip_doc = trip_response.data[0]
-    
-    # Check if payment is completed
-    if trip_doc.get('payment_status') != 'completed':
-        raise HTTPException(status_code=400, detail="Payment not completed")
-    
     # Update status
     supabase.table('trips').update({
         "status": "completed"
@@ -805,8 +804,7 @@ async def finalize_trip(request: Request, trip_id: str):
     
     return {
         "message": "Trip finalized successfully",
-        "trip_id": trip_id,
-        "note": "Itinerary confirmation sent to the provided contact details"
+        "trip_id": trip_id
     }
 
 @api_router.get("/trips/{trip_id}")
@@ -838,18 +836,30 @@ async def onboard_user(request: Request, data: OnboardingInput):
 @api_router.post("/trips/{trip_id}/confirm-payment")
 async def confirm_trip_payment(request: Request, trip_id: str, payload: Dict[str, Any]):
     user = await get_current_user(request)
-    transaction_id = payload.get('transaction_id')
-    passengers = payload.get('passengers', [])
     
-    # Update trip with payment info and passengers
+    # 1. Update Trip Status
     supabase.table('trips').update({
-        "payment_status": "completed",
-        "payment_id": transaction_id or "OFFLINE_SETTLEMENT",
-        "status": "orchestrated",
-        "passengers": passengers
-    }).eq("trip_id", trip_id).eq("user_id", user.user_id).execute()
+        "status": "orchestrated"
+    }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
-    return {"message": "Settlement Authorized", "transaction_id": transaction_id or "OFFLINE"}
+    # 2. Record Payment Detail in dedicated table
+    payment_record = {
+        "trip_id": trip_id,
+        "transaction_id": payload.get('transaction_id', 'OFFLINE'),
+        "primary_phone": payload.get('primary_phone', 'N/A'),
+        "email": payload.get('email'),
+        "secondary_phone": payload.get('secondary_phone'),
+        "total_amount": payload.get('total_amount', 0.0),
+        "agency_charge": payload.get('agency_charge', 0.0)
+    }
+    
+    supabase.table('payments').insert(payment_record).execute()
+    
+    return {
+        "message": "Settlement Authorized",
+        "trip_id": trip_id,
+        "status": "orchestrated"
+    }
 
 @api_router.post("/trip/send-manifest")
 async def send_trip_manifest(request: Request, payload: Dict[str, Any]):
