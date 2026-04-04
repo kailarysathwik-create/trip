@@ -508,6 +508,24 @@ Use REAL Indian transport data and realistic INR pricing."""
         import json
         transport_data = json.loads(response_text)
         
+        # Groq json_object mode always returns a dict wrapper — extract the array
+        if isinstance(transport_data, dict):
+            # Try common wrapper keys
+            for key in ['transport_options', 'options', 'transports', 'data', 'results']:
+                if key in transport_data and isinstance(transport_data[key], list):
+                    transport_data = transport_data[key]
+                    break
+            else:
+                # If still a dict, grab the first list value found
+                for v in transport_data.values():
+                    if isinstance(v, list):
+                        transport_data = v
+                        break
+        
+        if not isinstance(transport_data, list):
+            logging.error(f"Unexpected transport format from AI: {type(transport_data)} - {transport_data}")
+            transport_data = []
+        
         # Add option IDs
         for i, option in enumerate(transport_data):
             option["option_id"] = f"transport_{i+1}"
@@ -607,6 +625,22 @@ Use REAL data for {details['destination']} with accurate INR pricing."""
         
         import json
         stays_data = json.loads(response_text)
+        
+        # Groq json_object mode always returns a dict wrapper — extract the array
+        if isinstance(stays_data, dict):
+            for key in ['stay_options', 'stays', 'accommodations', 'hotels', 'options', 'data', 'results']:
+                if key in stays_data and isinstance(stays_data[key], list):
+                    stays_data = stays_data[key]
+                    break
+            else:
+                for v in stays_data.values():
+                    if isinstance(v, list):
+                        stays_data = v
+                        break
+        
+        if not isinstance(stays_data, list):
+            logging.error(f"Unexpected stays format from AI: {type(stays_data)} - {stays_data}")
+            stays_data = []
         
         # Add option IDs
         for i, option in enumerate(stays_data):
