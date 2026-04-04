@@ -298,23 +298,6 @@ async def logout(request: Request, response: Response):
 
 # ============ Onboarding Route ============
 
-@api_router.post("/onboarding")
-async def complete_onboarding(request: Request, input: OnboardingInput):
-    user = await get_current_user(request)
-    
-    supabase.table('users').update({
-        "organization": input.organization,
-        "phone": input.phone,
-        "website": input.website,
-        "upi_id": input.upi_id,
-        "has_payment_setup": True
-    }).eq('user_id', user.user_id).execute()
-    
-    # Get updated user
-    user_response = supabase.table('users').select('*').eq('user_id', user.user_id).execute()
-    
-    return User(**user_response.data[0])
-
 # ============ Trip Routes ============
 
 @api_router.post("/trips/create")
