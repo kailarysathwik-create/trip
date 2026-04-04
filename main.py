@@ -164,7 +164,11 @@ async def get_current_user(request: Request) -> User:
     
     user_doc = user_response.data[0]
     
-    return User(**user_doc)
+    try:
+        return User(**user_doc)
+    except Exception as e:
+        logging.error(f"User model construction failed: {e} | user_doc keys: {list(user_doc.keys())}")
+        raise HTTPException(status_code=500, detail=f"User model error: {str(e)}")
 
 # ============ Auth Routes ============
 
@@ -350,17 +354,29 @@ async def logout(request: Request, response: Response):
 
 @api_router.post("/onboarding")
 async def onboarding(request: Request, input: OnboardingInput):
-    user = await get_current_user(request)
-    
-    supabase.table('users').update({
-        "organization": input.organization,
-        "phone": input.phone,
-        "website": input.website,
-        "upi_id": input.upi_id,
-        "has_payment_setup": True
-    }).eq('user_id', user.user_id).execute()
-    
-    return {"success": True}
+    try:
+        user = await get_current_user(request)
+        
+        supabase.table('users').update({
+            "organization": input.organization,
+            "phone": input.phone,
+            "website": input.website,
+            "upi_id": input.upi_id,
+            "has_payment_setup": True
+        }).eq('user_id', user.user_id).execute()
+        
+        return {"success": True}
+    except HTTPException:
+        raise
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(f"Onboarding failed: {e}\n{tb}")
+        origin = request.headers.get("Origin", "https://yash-three-dusky.vercel.app")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Onboarding Failed", "msg": str(e), "traceback": tb},
+            headers={"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true"}
+        )
 
 # ============ Trip Routes ============
 
