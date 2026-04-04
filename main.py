@@ -17,9 +17,13 @@ ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
 # Supabase connection — use env vars, fall back to known project values
-SUPABASE_URL = os.environ.get('SUPABASE_URL', 'https://bitpovthujinbitxgiys.supabase.co')
+SUPABASE_URL = os.environ.get('SUPABASE_URL', '')
 SUPABASE_SERVICE_KEY = os.environ.get('SUPABASE_SERVICE_KEY', '')
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY)
+
+if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
+    logging.error("CRITICAL: SUPABASE_URL or SUPABASE_SERVICE_KEY is missing from environment variables!")
+
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY) if SUPABASE_URL and SUPABASE_SERVICE_KEY else None
 
 # Create the main app without a prefix
 app = FastAPI()
@@ -211,11 +215,16 @@ async def google_login(request: Request):
 
 @api_router.post("/auth/session")
 async def create_session(request: Request, response: Response):
+    if not supabase:
+        logging.error("Supabase client not initialized due to missing keys")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "External Service Error", "msg": "Supabase credentials missing on server"},
+            headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+        )
+
     body = await request.json()
     access_token = body.get('access_token')
-
-    if not access_token:
-        raise HTTPException(status_code=400, detail="access_token required")
 
     # Verify the Supabase access_token and get the authenticated user
     try:
