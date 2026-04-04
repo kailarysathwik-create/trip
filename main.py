@@ -95,6 +95,7 @@ class TouristDetail(BaseModel):
     name: str
     age: int
     gender: str
+    proof: str # Aadhar ID
 
 class TouristDetailsInput(BaseModel):
     tourists: List[TouristDetail]
@@ -835,21 +836,20 @@ async def onboard_user(request: Request, data: OnboardingInput):
     return {"message": "Protocol established", "data": result.data}
 
 @api_router.post("/trips/{trip_id}/confirm-payment")
-async def confirm_trip_payment(request: Request, trip_id: str, payload: Dict[str, str]):
+async def confirm_trip_payment(request: Request, trip_id: str, payload: Dict[str, Any]):
     user = await get_current_user(request)
     transaction_id = payload.get('transaction_id')
+    passengers = payload.get('passengers', [])
     
-    if not transaction_id:
-        raise HTTPException(status_code=400, detail="Transaction ID required")
-    
-    # Update trip with payment info
+    # Update trip with payment info and passengers
     supabase.table('trips').update({
         "payment_status": "completed",
-        "payment_id": transaction_id,
-        "status": "orchestrated"
+        "payment_id": transaction_id or "OFFLINE_SETTLEMENT",
+        "status": "orchestrated",
+        "passengers": passengers
     }).eq("trip_id", trip_id).eq("user_id", user.user_id).execute()
     
-    return {"message": "Settlement Authorized", "transaction_id": transaction_id}
+    return {"message": "Settlement Authorized", "transaction_id": transaction_id or "OFFLINE"}
 
 @api_router.post("/trip/send-manifest")
 async def send_trip_manifest(request: Request, payload: Dict[str, Any]):
@@ -873,7 +873,12 @@ origins = os.environ.get("CORS_ORIGINS")
 if origins:
     origins = origins.split(",")
 else:
-    origins = ["*"]
+    # Explicitly whitelist the Vercel production origin to avoid wildcard issues with credentials
+    origins = [
+        "https://yash-three-dusky.vercel.app", 
+        "http://localhost:3000",
+        "https://yash-kailarysathwik-create.vercel.app"
+    ]
 
 app.add_middleware(
     CORSMiddleware,
