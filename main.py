@@ -151,8 +151,15 @@ async def get_current_user(request: Request) -> User:
     
     session_doc = session_response.data[0]
     
-    # Check expiry
-    expires_at = datetime.fromisoformat(session_doc["expires_at"].replace('Z', '+00:00'))
+    # Check expiry - handle various Supabase timestamp formats
+    try:
+        expires_at = datetime.fromisoformat(session_doc["expires_at"].replace('Z', '+00:00'))
+    except ValueError:
+        # Fallback: strip microseconds if fromisoformat fails on Python 3.10
+        raw = session_doc["expires_at"]
+        if '.' in raw:
+            raw = raw[:raw.index('.')] + raw[raw.index('+'):] if '+' in raw else raw[:raw.index('.')]
+        expires_at = datetime.fromisoformat(raw.replace('Z', '+00:00'))
     if expires_at < datetime.now(timezone.utc):
         raise HTTPException(status_code=401, detail="Session expired")
     
