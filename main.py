@@ -431,14 +431,17 @@ Return ONLY a JSON array with exactly {details['num_days']} objects:
         import json
         itinerary_data = json.loads(response_text)
         
-        # Ensure we have a list of days, even if AI wrapped it in an object
+        # Robustly extract the array from dict wrapper keys
         if isinstance(itinerary_data, dict):
-            if "days" in itinerary_data:
-                itinerary_data = itinerary_data["days"]
-            elif "itinerary" in itinerary_data:
-                itinerary_data = itinerary_data["itinerary"]
-                if isinstance(itinerary_data, dict) and "days" in itinerary_data:
-                    itinerary_data = itinerary_data["days"]
+            for key in ["days", "itinerary", "plan", "trip", "activities", "data"]:
+                if key in itinerary_data and isinstance(itinerary_data[key], list):
+                    itinerary_data = itinerary_data[key]
+                    break
+            else:
+                for v in itinerary_data.values():
+                    if isinstance(v, list):
+                        itinerary_data = v
+                        break
 
         if not isinstance(itinerary_data, list):
             logging.error(f"Unexpected itinerary format from AI: {type(itinerary_data)}")
@@ -481,15 +484,18 @@ async def generate_transport(request: Request, trip_id: str):
     transport_mode = details['transport_mode']
     
     RAPIDAPI_KEY = os.environ.get('RAPIDAPI_KEY', 'e580c5c040msh0b8c675d17e2bacp1009bbjsn165082508389')
-    transport_data = []
+    transport_data = {"onward": [], "return": []}
 
     try:
         import json
+        from datetime import datetime, timedelta
         client = Groq(
             api_key=os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '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')
         )
         
-        async with httpx.AsyncClient(timeout=20.0) as http_client:
+        return_date = (datetime.strptime(details['start_date'], "%Y-%m-%d") + timedelta(days=details.get("num_days", 1))).strftime("%Y-%m-%d")
+        
+        async with httpx.AsyncClient(timeout=30.0) as http_client:
             if transport_mode == 'train':
                 prompt = f"Convert these cities into exact IRCTC Indian Railway station codes. From: '{details['from_location']}', To: '{details['destination']}'. Return ONLY JSON format: {{\"from_code\": \"NDLS\", \"to_code\": \"MAS\"}}"
                 completion = client.chat.completions.create(
@@ -502,27 +508,30 @@ async def generate_transport(request: Request, trip_id: str):
                 to_code = codes.get('to_code', 'MAS')
 
                 headers = {"x-rapidapi-host": "irctc1.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY}
-                res = await http_client.get(f"https://irctc1.p.rapidapi.com/api/v3/trainBetweenStations?fromStationCode={from_code}&toStationCode={to_code}&dateOfJourney={details['start_date']}", headers=headers)
                 
-                if res.status_code == 200:
-                    api_data = res.json()
-                    trains = api_data.get('data', [])
-                    for i, t in enumerate(trains[:5]):
-                        for c in t.get('class_type', ['SL']):
-                            price = 600 if c == 'SL' else (1800 if c in ['3A', '3E'] else (2500 if c == '2A' else 4000))
-                            transport_data.append({
-                                "option_id": f"transport_{len(transport_data)+1}",
-                                "type": "train",
-                                "provider": f"{t.get('train_name')} ({t.get('train_number')})",
-                                "class": c,
-                                "from_location": t.get('from_station_name', details['from_location']),
-                                "to_location": t.get('to_station_name', details['destination']),
-                                "departure_time": f"{t.get('train_date', details['start_date'])} {t.get('from_std', '00:00')}",
-                                "arrival_time": f"Day {t.get('to_day', 0) + 1} {t.get('to_sta', '00:00')}",
-                                "duration": str(t.get('duration', 'N/A')),
-                                "price": price,
-                                "seats_hint": "Available" if i % 2 == 0 else "WL"
-                            })
+                for route_date, route_key, f_code, t_code, fl, tl in [
+                    (details['start_date'], "onward", from_code, to_code, details['from_location'], details['destination']),
+                    (return_date, "return", to_code, from_code, details['destination'], details['from_location'])
+                ]:
+                    res = await http_client.get(f"https://irctc1.p.rapidapi.com/api/v3/trainBetweenStations?fromStationCode={f_code}&toStationCode={t_code}&dateOfJourney={route_date}", headers=headers)
+                    if res.status_code == 200:
+                        trains = res.json().get('data', [])
+                        for i, t in enumerate(trains[:5]):
+                            for c in t.get('class_type', ['SL']):
+                                price = 600 if c == 'SL' else (1800 if c in ['3A', '3E'] else (2500 if c == '2A' else 4000))
+                                transport_data[route_key].append({
+                                    "option_id": f"transport_{route_key}_{len(transport_data[route_key])+1}",
+                                    "type": "train",
+                                    "provider": f"{t.get('train_name')} ({t.get('train_number')})",
+                                    "class": c,
+                                    "from_location": t.get('from_station_name', fl),
+                                    "to_location": t.get('to_station_name', tl),
+                                    "departure_time": f"{t.get('train_date', route_date)} {t.get('from_std', '00:00')}",
+                                    "arrival_time": f"Day {t.get('to_day', 0) + 1} {t.get('to_sta', '00:00')}",
+                                    "duration": str(t.get('duration', 'N/A')),
+                                    "price": price,
+                                    "seats_hint": "Available" if i % 2 == 0 else "WL"
+                                })
 
             elif transport_mode == 'flight':
                 async def get_airport(city):
@@ -537,32 +546,36 @@ async def generate_transport(request: Request, trip_id: str):
 
                 if from_skyId and to_skyId:
                     headers = {"x-rapidapi-host": "sky-scrapper.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY}
-                    url = f"https://sky-scrapper.p.rapidapi.com/api/v2/flights/searchFlightsComplete?originSkyId={from_skyId}&destinationSkyId={to_skyId}&originEntityId={from_entityId}&destinationEntityId={to_entityId}&date={details['start_date']}&cabinClass=economy&adults=1&sortBy=best&currency=INR&market=en-IN&countryCode=IN"
-                    res = await http_client.get(url, headers=headers)
-                    if res.status_code == 200:
-                        flights = res.json().get('data', {}).get('itineraries', [])
-                        for i, f in enumerate(flights[:10]):
-                            leg = f.get('legs', [{}])[0]
-                            carrier = leg.get('carriers', {}).get('marketing', [{}])[0].get('name', 'Airline')
-                            transport_data.append({
-                                "option_id": f"transport_{len(transport_data)+1}",
-                                "type": "flight",
-                                "provider": carrier,
-                                "class": "Economy",
-                                "from_location": leg.get('origin', {}).get('name', details['from_location']),
-                                "to_location": leg.get('destination', {}).get('name', details['destination']),
-                                "departure_time": f"{details['start_date']} {leg.get('departure', 'T00:00')[-8:-3]}",
-                                "arrival_time": f"{details['start_date']} {leg.get('arrival', 'T00:00')[-8:-3]}",
-                                "duration": f"{leg.get('durationInMinutes', 120) // 60}h {leg.get('durationInMinutes', 0) % 60}m",
-                                "price": f.get('price', {}).get('raw', 5000),
-                                "seats_hint": "Fast Filling" if i % 3 == 0 else "Available"
-                            })
+                    for route_date, route_key, fsy, tsy, fey, tey, fl, tl in [
+                        (details['start_date'], "onward", from_skyId, to_skyId, from_entityId, to_entityId, details['from_location'], details['destination']),
+                        (return_date, "return", to_skyId, from_skyId, to_entityId, from_entityId, details['destination'], details['from_location'])
+                    ]:
+                        url = f"https://sky-scrapper.p.rapidapi.com/api/v2/flights/searchFlightsComplete?originSkyId={fsy}&destinationSkyId={tsy}&originEntityId={fey}&destinationEntityId={tey}&date={route_date}&cabinClass=economy&adults=1&sortBy=best&currency=INR&market=en-IN&countryCode=IN"
+                        res = await http_client.get(url, headers=headers)
+                        if res.status_code == 200:
+                            flights = res.json().get('data', {}).get('itineraries', [])
+                            for i, f in enumerate(flights[:10]):
+                                leg = f.get('legs', [{}])[0]
+                                carrier = leg.get('carriers', {}).get('marketing', [{}])[0].get('name', 'Airline')
+                                transport_data[route_key].append({
+                                    "option_id": f"transport_{route_key}_{len(transport_data[route_key])+1}",
+                                    "type": "flight",
+                                    "provider": carrier,
+                                    "class": "Economy",
+                                    "from_location": leg.get('origin', {}).get('name', fl),
+                                    "to_location": leg.get('destination', {}).get('name', tl),
+                                    "departure_time": f"{route_date} {leg.get('departure', 'T00:00')[-8:-3]}",
+                                    "arrival_time": f"{route_date} {leg.get('arrival', 'T00:00')[-8:-3]}",
+                                    "duration": f"{leg.get('durationInMinutes', 120) // 60}h {leg.get('durationInMinutes', 0) % 60}m",
+                                    "price": f.get('price', {}).get('raw', 5000),
+                                    "seats_hint": "Fast Filling" if i % 3 == 0 else "Available"
+                                })
 
     except Exception as e:
         logging.error(f"Live Transport API error: {e}")
 
     # Fallback to LLM if Empty or Cab
-    if not transport_data:
+    if not transport_data["onward"]:
         logging.info("Falling back to LLM transport generation")
         prompt = f"""Generate realistic {transport_mode} options from {details['from_location']} to {details['destination']} on {details['start_date']}.
 Only use valid JSON array formatting. Include 3 options with properties: type, provider, class, from_location, to_location, departure_time, arrival_time, duration, price, seats_hint."""
@@ -575,11 +588,13 @@ Only use valid JSON array formatting. Include 3 options with properties: type, p
             )
             import json
             raw_data = json.loads(completion.choices[0].message.content)
+            fallback_list = []
             for v in raw_data.values() if isinstance(raw_data, dict) else raw_data:
-                if isinstance(v, list): transport_data = v; break
+                if isinstance(v, list): fallback_list = v; break
             
-            for i, option in enumerate(transport_data):
-                option["option_id"] = f"transport_{i+1}"
+            for i, option in enumerate(fallback_list):
+                option["option_id"] = f"transport_onward_{i+1}"
+                transport_data["onward"].append(option)
         except Exception as e:
             logging.error(f"LLM Fallback error: {e}")
             raise HTTPException(status_code=500, detail="Failed to generate transport options")
