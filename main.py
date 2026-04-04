@@ -836,6 +836,47 @@ async def get_trip(request: Request, trip_id: str):
     
     return trip_response.data[0]
 
+@api_router.post("/onboarding")
+async def onboard_user(request: Request, data: OnboardingInput):
+    user = await get_current_user(request)
+    
+    # Update Supabase user profile
+    result = supabase.table('users').update({
+        "organization": data.organization,
+        "phone": data.phone,
+        "website": data.website,
+        "upi_id": data.upi_id,
+        "has_payment_setup": True
+    }).eq("user_id", user.user_id).execute()
+    
+    return {"message": "Protocol established", "data": result.data}
+
+@api_router.post("/trips/{trip_id}/confirm-payment")
+async def confirm_trip_payment(request: Request, trip_id: str, payload: Dict[str, str]):
+    user = await get_current_user(request)
+    transaction_id = payload.get('transaction_id')
+    
+    if not transaction_id:
+        raise HTTPException(status_code=400, detail="Transaction ID required")
+    
+    # Update trip with payment info
+    supabase.table('trips').update({
+        "payment_status": "completed",
+        "payment_id": transaction_id,
+        "status": "orchestrated"
+    }).eq("trip_id", trip_id).eq("user_id", user.user_id).execute()
+    
+    return {"message": "Settlement Authorized", "transaction_id": transaction_id}
+
+@api_router.post("/trip/send-manifest")
+async def send_trip_manifest(request: Request, payload: Dict[str, Any]):
+    user = await get_current_user(request)
+    # This simulates sending a real Email/WhatsApp/SMS notification
+    logging.info(f"NOTIFICATION_HUB: Sending manifest to {payload.get('emails')} and {payload.get('phones')}")
+    logging.info(f"MANIFEST_CONTENT: {payload.get('manifest')}")
+    
+    return {"message": "Dispatched to notification hub"}
+
 @api_router.get("/trips")
 async def get_trips(request: Request):
     user = await get_current_user(request)
