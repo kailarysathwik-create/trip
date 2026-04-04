@@ -873,7 +873,7 @@ origins = os.environ.get("CORS_ORIGINS")
 if origins:
     origins = origins.split(",")
 else:
-    origins = ["*"
+    origins = ["*"]
 
 app.add_middleware(
     CORSMiddleware,
