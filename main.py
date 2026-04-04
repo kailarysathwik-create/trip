@@ -263,17 +263,18 @@ async def create_session(request: Request, response: Response):
     user_id = f"user_{uuid.uuid4().hex[:12]}"
 
     try:
-        # Check if user already exists in our users table
+        logging.info("DB: Searching for existing user...")
         existing_user_response = supabase.table('users').select('*').eq('email', user_data["email"]).execute()
 
         if existing_user_response.data and len(existing_user_response.data) > 0:
             user_id = existing_user_response.data[0]["user_id"]
-            # Update name/picture in case they changed
+            logging.info(f"DB: User found. Updating profile for {user_id}")
             supabase.table('users').update({
                 "name": user_data["name"],
                 "picture": user_data.get("picture")
             }).eq('user_id', user_id).execute()
         else:
+            logging.info(f"DB: New user. Inserting record for {user_id}")
             new_user = {
                 "user_id": user_id,
                 "email": user_data["email"],
@@ -288,7 +289,7 @@ async def create_session(request: Request, response: Response):
             }
             supabase.table('users').insert(new_user).execute()
 
-        # Store our session in Supabase
+        logging.info("DB: Storing session token...")
         session_doc = {
             "user_id": user_id,
             "session_token": session_token,
@@ -296,12 +297,15 @@ async def create_session(request: Request, response: Response):
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         supabase.table('user_sessions').insert(session_doc).execute()
+        logging.info("DB: Session storage successful")
     except Exception as e:
-        logging.error(f"Database sync failed during session creation: {e}")
+        tb = traceback.format_exc()
+        logging.error(f"FAIL: Database sync failed: {e}\n{tb}")
+        origin = request.headers.get("Origin", "https://yash-three-dusky.vercel.app")
         return JSONResponse(
             status_code=500,
-            content={"detail": "Database Synchronization Failed", "msg": str(e)},
-            headers={"Access-Control-Allow-Origin": request.headers.get("Origin", "*"), "Access-Control-Allow-Credentials": "true"}
+            content={"detail": "Database Synchronization Failed", "msg": str(e), "traceback": tb},
+            headers={"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true"}
         )
 
     # Set httpOnly cookie so the browser sends it on every request
