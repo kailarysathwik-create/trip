@@ -694,8 +694,16 @@ async def generate_transport(request: Request, trip_id: str):
     # Fallback to LLM if Empty or Cab
     if not transport_data["onward"]:
         logging.info("Falling back to LLM transport generation")
-        prompt = f"""Generate realistic {details['transport_mode']} options from {details['from_location']} to {details['destination']} on {details['start_date']}.
-Only use valid JSON array formatting. Include 3 options with properties: type, provider, class, from_location, to_location, departure_time, arrival_time, duration, price, seats_hint."""
+        prompt = f"""
+    Find 5 transport options (Flight/Train/Bus) for a journey from {details['from_location']} to {details['destination']}.
+    Return ONLY a JSON object with a key 'transport_options' containing a list of objects.
+    Each object MUST have:
+    - option_id: unique string
+    - provider: name of airline or service
+    - type: Flight, Train, or Bus
+    - price: numeric price in INR
+    - vehicle_id: a REAListic flight number or vehicle ID (e.g., IndiGo 6E-205, AI-101, IRCTC-12401)
+    """
         try:
             api_key = os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
             if not api_key:
@@ -992,6 +1000,11 @@ async def get_payment_info(request: Request, trip_id: str):
 async def confirm_trip_payment(request: Request, trip_id: str, payload: PaymentConfirmInput):
     user = await get_current_user(request)
     
+    # Verify Trip existence to avoid 500 error on deleted trips
+    trip_check = supabase.table('trips').select('trip_id').eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
+    if not trip_check.data or len(trip_check.data) == 0:
+        raise HTTPException(status_code=404, detail="Trip sequence not found in hub matrix")
+
     # 1. Update Trip Status
     supabase.table('trips').update({
         "status": "orchestrated"
