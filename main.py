@@ -111,7 +111,7 @@ class StayOption(BaseModel):
 
 class TouristDetail(BaseModel):
     name: str
-    age: int
+    age: Any
     gender: str
     proof: str # Aadhar/Passport ID
 
@@ -575,9 +575,11 @@ async def generate_transport(request: Request, trip_id: str):
     try:
         import json
         from datetime import datetime, timedelta
-        client = Groq(
-            api_key=os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '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')
-        )
+        api_key = os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
+        if not api_key:
+            raise ValueError("GROQ_API_KEY/EMERGENT_LLM_KEY is missing from environment variables")
+            
+        client = Groq(api_key=api_key)
         
         return_date = (datetime.strptime(details['start_date'], "%Y-%m-%d") + timedelta(days=details.get("num_days", 1))).strftime("%Y-%m-%d")
         
@@ -810,11 +812,10 @@ async def select_stays(request: Request, trip_id: str):
     trip_response = supabase.table('trips').select('*').eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     if trip_response.data:
         trip_doc = trip_response.data[0]
-        stay_options = trip_doc.get("stay_options", [])
         
         # Send notification to each selected stay owner
         for stay_id in stay_ids:
-            stay = next((s for s in stay_options if s.get("option_id") == stay_id), None)
+            stay = next((s for s in trip_doc.get("stay_options", []) if s.get("option_id") == stay_id), None)
             if stay and stay.get("contact_phone"):
                 # Log notification (in production, send SMS/Email)
                 logging.info(f"NOTIFICATION: Stay booking at {stay['name']} - Contact: {stay['contact_phone']}")
@@ -844,16 +845,30 @@ async def save_tourist_details(request: Request, trip_id: str, input: TouristDet
     # Bulk insert new passengers
     passenger_records = []
     for t in input.tourists:
+        try:
+            # Ensure age is an integer
+            p_age = int(t.age) if t.age else 0
+        except (ValueError, TypeError):
+            p_age = 0
+            
         passenger_records.append({
             "trip_id": trip_id,
             "name": t.name,
-            "age": t.age,
+            "age": p_age,
             "gender": t.gender,
             "proof": t.proof
         })
     
     if passenger_records:
         supabase.table('passengers').insert(passenger_records).execute()
+
+    # Save contact info and agency charges to trips table
+    supabase.table('trips').update({
+        "contact_phone": input.contact_phone,
+        "contact_email": input.contact_email,
+        "secondary_phone": input.secondary_phone,
+        "agency_charges_percentage": input.agency_charges
+    }).eq('trip_id', trip_id).execute()
     
     return {"message": "Explorer Matrix Synchronized"}
 
