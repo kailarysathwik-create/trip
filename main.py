@@ -126,8 +126,8 @@ class TouristDetailsInput(BaseModel):
 
 class PaymentConfirmInput(BaseModel):
     transaction_id: str
-    primary_phone: str
-    email: str
+    primary_phone: Optional[str] = None
+    email: Optional[str] = None
     secondary_phone: Optional[str] = None
     total_amount: float
     agency_charge: float
@@ -388,16 +388,32 @@ async def onboarding(request: Request, input: OnboardingInput):
         )
 
 # ============ Trip Helper ============
+def get_trip_details(trip_doc: Dict[str, Any]) -> Dict[str, Any]:
+    from datetime import datetime
+    start_date = trip_doc.get("start_date")
+    end_date = trip_doc.get("end_date")
+    
+    num_days = 1
+    if start_date and end_date:
+        try:
+            # Handle potential 'Z' suffix and other variants
+            d1_str = start_date.replace('Z', '+00:00') if isinstance(start_date, str) else start_date
+            d2_str = end_date.replace('Z', '+00:00') if isinstance(end_date, str) else end_date
+            
+            d1 = datetime.fromisoformat(d1_str)
+            d2 = datetime.fromisoformat(d2_str)
+            num_days = (d2 - d1).days + 1
+        except Exception:
+            num_days = 1
 
-def get_trip_details(trip_doc: dict) -> dict:
-    """Build a details dict from individual columns for backward compatibility."""
     return {
-        "from_location": trip_doc.get("from_location", ""),
-        "destination": trip_doc.get("destination", ""),
-        "start_date": str(trip_doc.get("start_date", "")),
-        "num_days": trip_doc.get("num_days", 1),
-        "num_people": trip_doc.get("num_people", 1),
-        "transport_mode": trip_doc.get("transport_mode", "train"),
+        "from_location": trip_doc.get("from_location") or "Unknown",
+        "destination": trip_doc.get("destination") or "Unknown",
+        "start_date": start_date or datetime.now().strftime("%Y-%m-%d"),
+        "end_date": end_date or datetime.now().strftime("%Y-%m-%d"),
+        "num_people": trip_doc.get("num_people") or 1,
+        "transport_mode": trip_doc.get("transport_mode") or "flight",
+        "num_days": max(1, num_days)
     }
 
 # ============ Trip Routes ============
@@ -459,36 +475,33 @@ async def generate_itinerary(request: Request, trip_id: str):
         stays_info = "Accommodation:\n" + "\n".join([f"- {s.get('name', 'Hotel')} in {s.get('location', details['destination'])}" for s in stays_list[:3]])
 
     # Generate itinerary using AI
-    prompt = f"""Create a detailed {details['num_days']}-day travel itinerary for a trip to {details['destination']}.
+    prompt = f"""Create a comprehensive, REAL-TIME {details['num_days']}-day travel itinerary for a trip to {details['destination']}.
 
 CRITICAL RULES:
 1. You MUST provide exactly {details['num_days']} days.
-2. {details['from_location']} is ONLY the starting/departure city. Do NOT plan any sightseeing or activities in {details['from_location']}.
-3. Day 1 begins with arrival at {details['destination']}. Plan all activities ONLY at/around {details['destination']}.
-4. The last day should include departure back to {details['from_location']}.
-5. Use the transport and stay details below when planning.
+2. {details['from_location']} is ONLY the departure city. Do NOT plan activities there.
+3. Day 1 begins with arrival at {details['destination']}.
+4. Provide precise TIMINGS (e.g., 09:00 AM) for every activity.
+5. Include "Stay Timings" (Check-in/Check-out) and "Travel Details" (Local cab durations).
 
-CONTEXT:
-- Start Date: {details['start_date']}
-- Travelers: {details['num_people']} person(s)
-- {transport_info}
-- {stays_info}
-{f"- Places to cover: {details.get('places_to_cover', '')}" if details.get('places_to_cover') else ""}
-
-INSTRUCTIONS:
-- Include REAL tourist attractions, restaurants, and local experiences in {details['destination']}.
-- Morning, afternoon, and evening activities for each day.
-- Include estimated costs and timings where possible.
-
-Return ONLY a JSON array with exactly {details['num_days']} objects:
-[
-  {{
-    "day": 1,
-    "title": "Arrival & First Impressions",
-    "places": ["Real Place 1", "Real Place 2"],
-    "activities": ["Arrive at destination", "Check into hotel", "Visit local market"]
-  }}
-]"""
+Return ONLY valid JSON in this format:
+{{
+  "itinerary": [
+    {{
+      "day": 1,
+      "title": "Arrival & Initial Exploration",
+      "activities": [
+        "09:00 AM - Arrival: Transfer to hotel via agency cab (30 mins)",
+        "11:30 AM - Sightseeing: Visit Monument X (Duration: 2 hours)",
+        "02:00 PM - Lunch: Local Cuisine at Restaurant Z",
+        "06:30 PM - Evening: Leisure Walk at Destination Park"
+      ],
+      "transport": "Local agency cab for all transfers",
+      "accommodation": "Check-in at Hotel Y (Check-out next day 10:00 AM)"
+    }}
+  ]
+}}
+"""
     
     try:
         # Initialize Groq client
@@ -504,7 +517,7 @@ Return ONLY a JSON array with exactly {details['num_days']} objects:
             "For each day, provide a title and a list of activities. "
             "Activities MUST include specific timings (e.g., '10:00 AM - Visit Beach'), transit details (e.g., 'Travel via private cab'), "
             "and stay instructions (e.g., '6:00 PM - Check-in at Sea View Resort'). "
-            "Format: Return ONLY a JSON object with a 'days' key containing a list of {day: int, title: str, activities: List[str]} objects. "
+            "Format: Return ONLY a JSON object with an 'itinerary' key containing a list of {day: int, title: str, activities: List[str]} objects. "
             "DO NOT return markdown. Activities MUST be strings, NOT objects."
         )
         
@@ -841,6 +854,11 @@ async def select_stays(request: Request, trip_id: str):
     
     return {"message": "Stays selected and owners notified"}
 
+@api_router.post("/trips/{trip_id}/orchestrate")
+async def orchestrate_trip(request: Request, trip_id: str, input: TouristDetailsInput):
+    # This is an alias for tourist-details to maintain frontend compatibility
+    return await save_tourist_details(request, trip_id, input)
+
 @api_router.post("/trips/{trip_id}/tourist-details")
 async def save_tourist_details(request: Request, trip_id: str, input: TouristDetailsInput):
     user = await get_current_user(request)
@@ -850,14 +868,13 @@ async def save_tourist_details(request: Request, trip_id: str, input: TouristDet
     if not trip_res.data:
         raise HTTPException(status_code=404, detail="Trip not found")
 
-    # Clear existing passengers for this trip if any
+    # Clear existing passengers for this trip
     supabase.table('passengers').delete().eq('trip_id', trip_id).execute()
 
     # Bulk insert new passengers
     passenger_records = []
     for t in input.tourists:
         try:
-            # Ensure age is an integer
             p_age = int(t.age) if t.age else 0
         except (ValueError, TypeError):
             p_age = 0
@@ -873,17 +890,19 @@ async def save_tourist_details(request: Request, trip_id: str, input: TouristDet
     if passenger_records:
         supabase.table('passengers').insert(passenger_records).execute()
 
-    # Save contact info, agency charge, and cab metadata to trips table
+    # Update trip with metadata and status
     supabase.table('trips').update({
         "contact_phone": input.contact_phone,
         "contact_email": input.contact_email,
         "secondary_phone": input.secondary_phone,
         "agency_charge": input.agency_charge,
         "num_cabs": input.num_cabs,
-        "number_plate": input.number_plate
+        "number_plate": input.number_plate,
+        "status": "orchestrated"
     }).eq('trip_id', trip_id).execute()
-    
-    return {"message": "Explorer Matrix Synchronized"}
+
+    return {"status": "ok", "message": "Details saved and trip orchestrated"}
+
 
 # ============ Payment Routes ============
 
