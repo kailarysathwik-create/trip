@@ -120,7 +120,9 @@ class TouristDetailsInput(BaseModel):
     contact_phone: str
     contact_email: Optional[str] = None
     secondary_phone: Optional[str] = None
-    agency_charges: Optional[float] = 0.0
+    agency_charge: Optional[float] = 0.0
+    num_cabs: Optional[int] = 1
+    number_plate: Optional[str] = None
 
 class PaymentConfirmInput(BaseModel):
     transaction_id: str
@@ -497,10 +499,19 @@ Return ONLY a JSON array with exactly {details['num_days']} objects:
         client = Groq(api_key=api_key)
         
         # Get AI response using Groq library
+        system_prompt = (
+            "You are a professional travel agency orchestrator. Generate an EXTREMELY DETAILED day-wise itinerary. "
+            "For each day, provide a title and a list of activities. "
+            "Activities MUST include specific timings (e.g., '10:00 AM - Visit Beach'), transit details (e.g., 'Travel via private cab'), "
+            "and stay instructions (e.g., '6:00 PM - Check-in at Sea View Resort'). "
+            "Format: Return ONLY a JSON object with a 'days' key containing a list of {day: int, title: str, activities: List[str]} objects. "
+            "DO NOT return markdown. Activities MUST be strings, NOT objects."
+        )
+        
         completion = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
             messages=[
-                {"role": "system", "content": "You are a professional travel planner. Return only valid JSON without markdown formatting."},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": prompt}
             ],
             response_format={ "type": "json_object" }
@@ -862,12 +873,14 @@ async def save_tourist_details(request: Request, trip_id: str, input: TouristDet
     if passenger_records:
         supabase.table('passengers').insert(passenger_records).execute()
 
-    # Save contact info and agency charges to trips table
+    # Save contact info, agency charge, and cab metadata to trips table
     supabase.table('trips').update({
         "contact_phone": input.contact_phone,
         "contact_email": input.contact_email,
         "secondary_phone": input.secondary_phone,
-        "agency_charges_percentage": input.agency_charges
+        "agency_charge": input.agency_charge,
+        "num_cabs": input.num_cabs,
+        "number_plate": input.number_plate
     }).eq('trip_id', trip_id).execute()
     
     return {"message": "Explorer Matrix Synchronized"}
