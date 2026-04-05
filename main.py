@@ -490,9 +490,11 @@ Return ONLY a JSON array with exactly {details['num_days']} objects:
     
     try:
         # Initialize Groq client
-        client = Groq(
-            api_key=os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', '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')
-        )
+        api_key = os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
+        if not api_key:
+            raise ValueError("GROQ_API_KEY/EMERGENT_LLM_KEY is missing from environment variables")
+            
+        client = Groq(api_key=api_key)
         
         # Get AI response using Groq library
         completion = client.chat.completions.create(
@@ -665,7 +667,11 @@ async def generate_transport(request: Request, trip_id: str):
         prompt = f"""Generate realistic {details['transport_mode']} options from {details['from_location']} to {details['destination']} on {details['start_date']}.
 Only use valid JSON array formatting. Include 3 options with properties: type, provider, class, from_location, to_location, departure_time, arrival_time, duration, price, seats_hint."""
         try:
-            client = Groq(api_key=os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', 'default'))
+            api_key = os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
+            if not api_key:
+                raise ValueError("GROQ_API_KEY/EMERGENT_LLM_KEY is missing from environment variables")
+                
+            client = Groq(api_key=api_key)
             completion = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": prompt}],
@@ -770,7 +776,11 @@ async def generate_stays(request: Request, trip_id: str):
         logging.info("Falling back to LLM stays generation")
         prompt = f"""Generate {num_days-1} hotel options for a {num_days}-day trip to {details['destination']}. Return JSON array only with: name, location, contact_phone, contact_email, check_in_day, check_out_day, price_per_night, rating, amenities."""
         try:
-            client = Groq(api_key=os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', 'default'))
+            api_key = os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
+            if not api_key:
+                raise ValueError("GROQ_API_KEY/EMERGENT_LLM_KEY is missing from environment variables")
+                
+            client = Groq(api_key=api_key)
             completion = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
                 messages=[{"role": "user", "content": prompt}],
