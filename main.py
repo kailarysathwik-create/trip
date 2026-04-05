@@ -385,6 +385,19 @@ async def onboarding(request: Request, input: OnboardingInput):
             headers={"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true"}
         )
 
+# ============ Trip Helper ============
+
+def get_trip_details(trip_doc: dict) -> dict:
+    """Build a details dict from individual columns for backward compatibility."""
+    return {
+        "from_location": trip_doc.get("from_location", ""),
+        "destination": trip_doc.get("destination", ""),
+        "start_date": str(trip_doc.get("start_date", "")),
+        "num_days": trip_doc.get("num_days", 1),
+        "num_people": trip_doc.get("num_people", 1),
+        "transport_mode": trip_doc.get("transport_mode", "train"),
+    }
+
 # ============ Trip Routes ============
 
 @api_router.post("/trips/create")
@@ -423,7 +436,7 @@ async def generate_itinerary(request: Request, trip_id: str):
         raise HTTPException(status_code=404, detail="Trip not found")
     
     trip_doc = trip_response.data[0]
-    details = trip_doc["details"]
+    details = get_trip_details(trip_doc)
     
     # Enrich prompt with actual booking data
     transport_info = ""
@@ -545,7 +558,7 @@ async def generate_transport(request: Request, trip_id: str):
         raise HTTPException(status_code=404, detail="Trip not found")
     
     trip_doc = trip_response.data[0]
-    details = trip_doc["details"]
+    details = get_trip_details(trip_doc)
     transport_mode = details['transport_mode']
     
     RAPIDAPI_KEY = os.environ.get('RAPIDAPI_KEY', 'e580c5c040msh0b8c675d17e2bacp1009bbjsn165082508389')
@@ -694,7 +707,7 @@ async def generate_stays(request: Request, trip_id: str):
         raise HTTPException(status_code=404, detail="Trip not found")
     
     trip_doc = trip_response.data[0]
-    details = trip_doc["details"]
+    details = get_trip_details(trip_doc)
     num_days = details["num_days"]
     
     RAPIDAPI_KEY = os.environ.get('RAPIDAPI_KEY', 'e580c5c040msh0b8c675d17e2bacp1009bbjsn165082508389')
