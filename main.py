@@ -677,6 +677,7 @@ async def generate_transport(request: Request, trip_id: str):
                                     "option_id": f"transport_{route_key}_{len(transport_data[route_key])+1}",
                                     "type": "flight",
                                     "provider": carrier,
+                                    "vehicle_id": leg.get('segments', [{}])[0].get('flightNumber', f"{carrier[:2].upper()}-{index+100}"),
                                     "class": "Economy",
                                     "from_location": leg.get('origin', {}).get('name', fl),
                                     "to_location": leg.get('destination', {}).get('name', tl),
@@ -691,18 +692,22 @@ async def generate_transport(request: Request, trip_id: str):
         tb = traceback.format_exc()
         logging.error(f"Transport generation error: {e}\n{tb}")
 
-    # Fallback to LLM if Empty or Cab
-    if not transport_data["onward"]:
+    if not transport_data["onward"] or (return_date and not transport_data["return"]):
         logging.info("Falling back to LLM transport generation")
         prompt = f"""
-    Find 5 transport options (Flight/Train/Bus) for a journey from {details['from_location']} to {details['destination']}.
-    Return ONLY a JSON object with a key 'transport_options' containing a list of objects.
+    Find 5 onward transport options (Flight/Train/Bus) from {details['from_location']} to {details['destination']} on {details['start_date']}.
+    {f"Also find 5 return transport options from {details['destination']} to {details['from_location']} on {return_date}." if return_date else ""}
+    Return ONLY a JSON object with keys 'onward' and 'return' (return can be empty if no return_date), each containing a list of objects.
     Each object MUST have:
     - option_id: unique string
     - provider: name of airline or service
     - type: Flight, Train, or Bus
     - price: numeric price in INR
     - vehicle_id: a REAListic flight number or vehicle ID (e.g., IndiGo 6E-205, AI-101, IRCTC-12401)
+    - from_location: string
+    - to_location: string
+    - departure_time: string (HH:MM)
+    - arrival_time: string (HH:MM)
     """
         try:
             api_key = os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY')
@@ -716,14 +721,18 @@ async def generate_transport(request: Request, trip_id: str):
                 response_format={ "type": "json_object" }
             )
             import json
-            raw_data = json.loads(completion.choices[0].message.content)
-            fallback_list = []
-            for v in raw_data.values() if isinstance(raw_data, dict) else raw_data:
-                if isinstance(v, list): fallback_list = v; break
+            fallback_data = json.loads(completion.choices[0].message.content)
             
-            for i, option in enumerate(fallback_list):
-                option["option_id"] = f"transport_onward_{i+1}"
-                transport_data["onward"].append(option)
+            if "onward" in fallback_data and isinstance(fallback_data["onward"], list):
+                for i, opt in enumerate(fallback_data["onward"]):
+                    opt["option_id"] = f"transport_onward_fallback_{i}"
+                    transport_data["onward"].append(opt)
+            
+            if "return" in fallback_data and isinstance(fallback_data["return"], list):
+                for i, opt in enumerate(fallback_data["return"]):
+                    opt["option_id"] = f"transport_return_fallback_{i}"
+                    transport_data["return"].append(opt)
+
         except Exception as e:
             tb = traceback.format_exc()
             logging.error(f"LLM Transport Fallback error: {e}\n{tb}")
