@@ -26,6 +26,10 @@ if not SUPABASE_URL or not SUPABASE_SERVICE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_SERVICE_KEY) if SUPABASE_URL and SUPABASE_SERVICE_KEY else None
 
+# In-memory cache for Destination IDs (City name -> Booking.com dest_id)
+DEST_ID_CACHE: Dict[str, str] = {}
+
+
 # Create the main app without a prefix
 app = FastAPI()
 
@@ -759,17 +763,24 @@ async def generate_stays(request: Request, trip_id: str):
     stays_data = []
 
     try:
-        async with httpx.AsyncClient(timeout=20.0) as http_client:
+        async with httpx.AsyncClient(timeout=10.0) as http_client:
             headers = {"x-rapidapi-host": "booking-com.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY}
             
-            # 1. Get location dest_id
-            loc_res = await http_client.get(f"https://booking-com.p.rapidapi.com/v1/hotels/locations?name={details['destination']}&locale=en-gb", headers=headers)
-            dest_id = None
-            if loc_res.status_code == 200:
-                for loc in loc_res.json():
-                    if loc.get('dest_type') == 'city':
-                        dest_id = loc.get('dest_id')
-                        break
+            # 1. Resolve Destination ID (with local caching to bypass redundant API calls)
+            city_key = details['destination'].strip().upper()
+            dest_id = DEST_ID_CACHE.get(city_key)
+            
+            if not dest_id:
+                try:
+                    loc_res = await http_client.get(f"https://booking-com.p.rapidapi.com/v1/hotels/locations?name={details['destination']}&locale=en-gb", headers=headers, timeout=5.0)
+                    if loc_res.status_code == 200:
+                        for loc in loc_res.json():
+                            if loc.get('dest_type') == 'city':
+                                dest_id = loc.get('dest_id')
+                                DEST_ID_CACHE[city_key] = dest_id
+                                break
+                except Exception as e:
+                    logging.warning(f"Destination resolution timeout for {details['destination']}, moving to fallback or AI search.")
             
             if dest_id:
                 # 2. Search Hotels
@@ -788,10 +799,10 @@ async def generate_stays(request: Request, trip_id: str):
                             "name": h.get("hotel_name"),
                             "location": h.get("address", details['destination']),
                             "contact_phone": "+91-XXXXXXXXXX", # Generic since API drops this
-                            "contact_email": "booking@hotel.com",
+                            "contact_email": f"reservations@{h.get('hotel_name', 'hotel').lower().replace(' ', '')}.com",
                             "check_in_day": 1,
                             "check_out_day": num_days,
-                            "price_per_night": h.get("gross_amount_per_night", {}).get("value", 2500) if isinstance(h.get("gross_amount_per_night"), dict) else 2500,
+                            "price_per_night": int(h.get("gross_amount_per_night", {}).get("value", 2500)) if isinstance(h.get("gross_amount_per_night"), dict) else 2500,
                             "rating": h.get("review_score", 4.0),
                             "amenities": ["WiFi"] + (["Breakfast"] if h.get("hotel_include_breakfast") else []) + (["Parking"] if h.get("has_free_parking") else [])
                         })
