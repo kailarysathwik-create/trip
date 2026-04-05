@@ -962,6 +962,10 @@ app.add_middleware(
 )
 app.include_router(api_router)
 
+@app.get("/api/health")
+async def health():
+    return {"status": "ok", "version": "v2-relational-fix", "has_get_trip_details": True}
+
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
