@@ -792,7 +792,9 @@ async def generate_stays(request: Request, trip_id: str):
                 hotel_res = await http_client.get(search_url, headers=headers)
                 
                 if hotel_res.status_code == 200:
-                    hotels = hotel_res.json()
+                    data = hotel_res.json()
+                    hotels = data.get('result', []) if isinstance(data, dict) else (data if isinstance(data, list) else [])
+                    logging.info(f"RapidAPI yielded {len(hotels)} potential stays for {details['destination']}.")
                     for i, h in enumerate(hotels[:15]):
                         stays_data.append({
                             "option_id": f"stay_{i+1}",
