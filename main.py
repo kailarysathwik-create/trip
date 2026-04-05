@@ -532,8 +532,14 @@ Return ONLY a JSON array with exactly {details['num_days']} objects:
         
         return {"itinerary": {"days": itinerary_data}}
     except Exception as e:
-        logging.error(f"AI generation error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to generate itinerary")
+        tb = traceback.format_exc()
+        logging.error(f"AI itinerary generation error: {e}\n{tb}")
+        origin = request.headers.get("Origin", "https://yash-three-dusky.vercel.app")
+        return JSONResponse(
+            status_code=500,
+            content={"detail": "Failed to generate itinerary", "msg": str(e), "traceback": tb},
+            headers={"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true"}
+        )
 
 @api_router.put("/trips/{trip_id}/itinerary")
 async def update_itinerary(request: Request, trip_id: str, itinerary: Itinerary):
@@ -650,12 +656,13 @@ async def generate_transport(request: Request, trip_id: str):
                                 })
 
     except Exception as e:
-        logging.error(f"Live Transport API error: {e}")
+        tb = traceback.format_exc()
+        logging.error(f"Transport generation error: {e}\n{tb}")
 
     # Fallback to LLM if Empty or Cab
     if not transport_data["onward"]:
         logging.info("Falling back to LLM transport generation")
-        prompt = f"""Generate realistic {transport_mode} options from {details['from_location']} to {details['destination']} on {details['start_date']}.
+        prompt = f"""Generate realistic {details['transport_mode']} options from {details['from_location']} to {details['destination']} on {details['start_date']}.
 Only use valid JSON array formatting. Include 3 options with properties: type, provider, class, from_location, to_location, departure_time, arrival_time, duration, price, seats_hint."""
         try:
             client = Groq(api_key=os.environ.get('GROQ_API_KEY') or os.environ.get('EMERGENT_LLM_KEY', 'default'))
@@ -674,8 +681,14 @@ Only use valid JSON array formatting. Include 3 options with properties: type, p
                 option["option_id"] = f"transport_onward_{i+1}"
                 transport_data["onward"].append(option)
         except Exception as e:
-            logging.error(f"LLM Fallback error: {e}")
-            raise HTTPException(status_code=500, detail="Failed to generate transport options")
+            tb = traceback.format_exc()
+            logging.error(f"LLM Transport Fallback error: {e}\n{tb}")
+            origin = request.headers.get("Origin", "https://yash-three-dusky.vercel.app")
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "Failed to generate transport options", "msg": str(e), "traceback": tb},
+                headers={"Access-Control-Allow-Origin": origin, "Access-Control-Allow-Credentials": "true"}
+            )
 
     supabase.table('trips').update({"transport_options": transport_data}).eq('trip_id', trip_id).execute()
     return {"transport_options": transport_data}
