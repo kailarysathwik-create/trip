@@ -1033,29 +1033,45 @@ async def confirm_trip_payment(request: Request, trip_id: str, payload: PaymentC
         "status": "orchestrated"
     }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
-    # 2. Record Payment Detail
-    tx_id = payload.transaction_id
-    if not tx_id or tx_id.strip() == "":
-        tx_id = f"OFFLINE_{trip_id}"
+    try:
+        # 2. Record Payment Detail
+        tx_id = payload.transaction_id
+        if not tx_id or tx_id.strip() == "":
+            # Add timestamp to ensure uniqueness even on retries for the same trip
+            tx_id = f"OFFLINE_{trip_id}_{int(datetime.now().timestamp())}"
 
-    payment_record = {
-        "trip_id": trip_id,
-        "transaction_id": tx_id,
-        "primary_phone": payload.primary_phone,
-        "email": payload.email,
-        "secondary_phone": payload.secondary_phone,
-        "total_amount": payload.total_amount,
-        "agency_charge": payload.agency_charge,
-        "status": "completed"
-    }
-    
-    supabase.table('payments').insert(payment_record).execute()
-    
-    return {
-        "message": "Settlement Authorized",
-        "trip_id": trip_id,
-        "status": "orchestrated"
-    }
+        payment_record = {
+            "trip_id": trip_id,
+            "transaction_id": tx_id,
+            "primary_phone": payload.primary_phone,
+            "email": payload.email,
+            "secondary_phone": payload.secondary_phone,
+            "total_amount": float(payload.total_amount),
+            "agency_charge": float(payload.agency_charge),
+            "status": "completed"
+        }
+        
+        insert_res = supabase.table('payments').insert(payment_record).execute()
+        
+        return {
+            "message": "Settlement Authorized",
+            "trip_id": trip_id,
+            "status": "orchestrated",
+            "reference": tx_id
+        }
+    except Exception as e:
+        tb = traceback.format_exc()
+        logging.error(f"CRITICAL: Payment Confirmation Failed for {trip_id}: {e}\n{tb}")
+        origin = request.headers.get("Origin", "")
+        return JSONResponse(
+            status_code=500,
+            content={
+                "detail": "Financial Matrix Handshake Failed",
+                "msg": str(e),
+                "trip_id": trip_id
+            },
+            headers={"Access-Control-Allow-Origin": origin if origin else "https://yash-three-dusky.vercel.app", "Access-Control-Allow-Credentials": "true"}
+        )
 
 @api_router.post("/trips/{trip_id}/finalize")
 async def finalize_trip(request: Request, trip_id: str):
