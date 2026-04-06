@@ -1034,9 +1034,13 @@ async def confirm_trip_payment(request: Request, trip_id: str, payload: PaymentC
     }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
     # 2. Record Payment Detail
+    tx_id = payload.transaction_id
+    if not tx_id or tx_id.strip() == "":
+        tx_id = f"OFFLINE_{trip_id}"
+
     payment_record = {
         "trip_id": trip_id,
-        "transaction_id": payload.transaction_id,
+        "transaction_id": tx_id,
         "primary_phone": payload.primary_phone,
         "email": payload.email,
         "secondary_phone": payload.secondary_phone,
