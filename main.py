@@ -1037,21 +1037,24 @@ async def confirm_trip_payment(request: Request, trip_id: str, payload: PaymentC
         # 2. Record Payment Detail
         tx_id = payload.transaction_id
         if not tx_id or tx_id.strip() == "":
-            # Add timestamp to ensure uniqueness even on retries for the same trip
             tx_id = f"OFFLINE_{trip_id}_{int(datetime.now().timestamp())}"
+
+        # Defensive casting and rounding for Postgres DECIMAL
+        total_amt = round(float(payload.total_amount or 0), 2)
+        agency_amt = round(float(payload.agency_charge or 0), 2)
 
         payment_record = {
             "trip_id": trip_id,
             "transaction_id": tx_id,
-            "primary_phone": payload.primary_phone,
-            "email": payload.email,
-            "secondary_phone": payload.secondary_phone,
-            "total_amount": float(payload.total_amount),
-            "agency_charge": float(payload.agency_charge),
+            "primary_phone": payload.primary_phone or "",
+            "email": payload.email or "",
+            "secondary_phone": payload.secondary_phone or "",
+            "total_amount": total_amt,
+            "agency_charge": agency_amt,
             "status": "completed"
         }
         
-        insert_res = supabase.table('payments').insert(payment_record).execute()
+        supabase.table('payments').insert(payment_record).execute()
         
         return {
             "message": "Settlement Authorized",
