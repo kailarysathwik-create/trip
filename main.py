@@ -129,7 +129,7 @@ class TouristDetailsInput(BaseModel):
     number_plate: Optional[str] = None
 
 class PaymentConfirmInput(BaseModel):
-    transaction_id: str
+    transaction_id: Optional[str] = None
     primary_phone: Optional[str] = None
     email: Optional[str] = None
     secondary_phone: Optional[str] = None
@@ -408,7 +408,7 @@ def get_trip_details(trip_doc: Dict[str, Any]) -> Dict[str, Any]:
             d2 = datetime.fromisoformat(d2_str)
             num_days = (d2 - d1).days + 1
         except Exception:
-            num_days = 1
+            num_days = trip_doc.get("num_days", 1)
 
     return {
         "from_location": trip_doc.get("from_location") or "Unknown",
@@ -417,7 +417,7 @@ def get_trip_details(trip_doc: Dict[str, Any]) -> Dict[str, Any]:
         "end_date": end_date or datetime.now().strftime("%Y-%m-%d"),
         "num_people": trip_doc.get("num_people") or 1,
         "transport_mode": trip_doc.get("transport_mode") or "flight",
-        "num_days": max(1, num_days)
+        "num_days": trip_doc.get("num_days") or max(1, num_days)
     }
 
 # ============ Trip Routes ============
@@ -428,12 +428,17 @@ async def create_trip(request: Request, details: TripDetails):
     
     trip_id = f"trip_{uuid.uuid4().hex[:12]}"
     
+    # Calculate end_date based on num_days
+    start_dt = datetime.fromisoformat(details.start_date.replace('Z', '+00:00'))
+    end_dt = start_dt + timedelta(days=details.num_days - 1)
+    
     trip_doc = {
         "trip_id": trip_id,
         "user_id": user.user_id,
         "from_location": details.from_location,
         "destination": details.destination,
         "start_date": details.start_date,
+        "end_date": end_dt.isoformat(),
         "num_days": details.num_days,
         "num_people": details.num_people,
         "transport_mode": details.transport_mode,
@@ -482,7 +487,7 @@ async def generate_itinerary(request: Request, trip_id: str):
     prompt = f"""Create a comprehensive, REAL-TIME {details['num_days']}-day travel itinerary for a trip to {details['destination']}.
 
 CRITICAL RULES:
-1. You MUST provide exactly {details['num_days']} days.
+1. You MUST provide exactly {details['num_days']} days. If num_days is {details['num_days']}, I expect activity blocks for Day 1, Day 2 ... through Day {details['num_days']}.
 2. {details['from_location']} is ONLY the departure city. Do NOT plan activities there.
 3. Day 1 begins with arrival at {details['destination']}.
 4. Provide precise TIMINGS (e.g., 09:00 AM) for every activity.
