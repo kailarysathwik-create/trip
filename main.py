@@ -491,31 +491,40 @@ async def generate_itinerary(request: Request, trip_id: str):
     if stay_options:
         stays_list = stay_options if isinstance(stay_options, list) else []
         stays_info = "Accommodation:\n" + "\n".join([f"- {s.get('name', 'Hotel')} in {s.get('location', details['destination'])}" for s in stays_list[:3]])
-
+    
     # Generate itinerary using AI
+    transport_mode = details.get('transport_mode', 'car').lower()
+    vector_directive = ""
+    if transport_mode == 'car':
+        vector_directive = "STRICT: This is a GROUND CAB trip. DO NOT mention flight boarding, airport transfers, or trains. Focus on road travel times."
+    elif transport_mode == 'train':
+        vector_directive = "STRICT: This is a RAIL trip. Mention exact station codes and arrival/departure station timings."
+    else:
+        vector_directive = "STRICT: This is a FLIGHT trip. Include boarding pass/airport transfer logistics."
+
     prompt = f"""Create a comprehensive, REAL-TIME {details['num_days']}-day travel itinerary for a trip to {details['destination']}.
+{vector_directive}
 
 CRITICAL RULES:
 1. You MUST provide exactly {details['num_days']} days. If num_days is {details['num_days']}, I expect activity blocks for Day 1, Day 2 ... through Day {details['num_days']}.
 2. {details['from_location']} is ONLY the departure city. Do NOT plan activities there.
 3. Day 1 begins with arrival at {details['destination']}.
 4. Provide precise TIMINGS (e.g., 09:00 AM) for every activity.
-5. Include "Stay Timings" (Check-in/Check-out) and "Travel Details" (Local cab durations).
+5. Include "Stay Timings" (Check-in/Check-out) and "Travel Details" (Local durations via {transport_mode}).
 
 Return ONLY valid JSON in this format:
 {{
   "itinerary": [
     {{
       "day": 1,
-      "title": "Arrival & Initial Exploration",
+      "title": "Arrival & Vector Synchronization",
       "activities": [
-        "09:00 AM - Arrival: Transfer to hotel via agency cab (30 mins)",
+        "09:00 AM - Arrival: Transfer to hotel via {transport_mode} (30 mins)",
         "11:30 AM - Sightseeing: Visit Monument X (Duration: 2 hours)",
         "02:00 PM - Lunch: Local Cuisine at Restaurant Z",
         "06:30 PM - Evening: Leisure Walk at Destination Park"
       ],
-      "transport": "Local agency cab for all transfers",
-      "accommodation": "Check-in at Hotel Y (Check-out next day 10:00 AM)"
+      "summary": "Arrival and initial exploration with check-in at hotel."
     }}
   ]
 }}
@@ -641,7 +650,7 @@ async def generate_transport(request: Request, trip_id: str):
                 
                 for route_date, route_key, f_code, t_code, fl, tl in [
                     (details['start_date'], "onward", from_code, to_code, details['from_location'], details['destination']),
-                    (return_date, "return", to_code, from_code, details['destination'], details['from_location'])
+                    (return_date, "return", t_code, from_code, details['destination'], details['from_location'])
                 ]:
                     res = await http_client.get(f"https://irctc1.p.rapidapi.com/api/v3/trainBetweenStations?fromStationCode={f_code}&toStationCode={t_code}&dateOfJourney={route_date}", headers=headers)
                     if res.status_code == 200:
@@ -678,7 +687,7 @@ async def generate_transport(request: Request, trip_id: str):
                     headers = {"x-rapidapi-host": "sky-scrapper.p.rapidapi.com", "x-rapidapi-key": RAPIDAPI_KEY}
                     for route_date, route_key, fsy, tsy, fey, tey, fl, tl in [
                         (details['start_date'], "onward", from_skyId, to_skyId, from_entityId, to_entityId, details['from_location'], details['destination']),
-                        (return_date, "return", to_skyId, from_skyId, to_entityId, from_entityId, details['destination'], details['from_location'])
+                        (return_date, "return", tsy, fsy, tey, fey, details['destination'], details['from_location'])
                     ]:
                         url = f"https://sky-scrapper.p.rapidapi.com/api/v2/flights/searchFlightsComplete?originSkyId={fsy}&destinationSkyId={tsy}&originEntityId={fey}&destinationEntityId={tey}&date={route_date}&cabinClass=economy&adults=1&sortBy=best&currency=INR&market=en-IN&countryCode=IN"
                         res = await http_client.get(url, headers=headers)
@@ -691,7 +700,7 @@ async def generate_transport(request: Request, trip_id: str):
                                     "option_id": f"transport_{route_key}_{len(transport_data[route_key])+1}",
                                     "type": "flight",
                                     "provider": carrier,
-                                    "vehicle_id": leg.get('segments', [{}])[0].get('flightNumber', f"{carrier[:2].upper()}-{index+100}"),
+                                    "vehicle_id": leg.get('segments', [{}])[0].get('flightNumber', f"{carrier[:2].upper()}-{i+100}"),
                                     "class": "Economy",
                                     "from_location": leg.get('origin', {}).get('name', fl),
                                     "to_location": leg.get('destination', {}).get('name', tl),
@@ -957,23 +966,19 @@ async def save_tourist_details(request: Request, trip_id: str, input: TouristDet
     supabase.table('passengers').delete().eq('trip_id', trip_id).execute()
 
     # Bulk insert new passengers
-    passenger_records = []
+    pax_records = []
     for t in input.tourists:
-        try:
-            p_age = int(t.age) if t.age else 0
-        except (ValueError, TypeError):
-            p_age = 0
-            
-        passenger_records.append({
+        pax_records.append({
             "trip_id": trip_id,
             "name": t.name,
-            "age": p_age,
+            "age": t.age,
             "gender": t.gender,
-            "proof": t.proof
+            "proof": t.proof,
+            "is_primary": getattr(t, 'is_primary', False)
         })
     
-    if passenger_records:
-        supabase.table('passengers').insert(passenger_records).execute()
+    if pax_records:
+        supabase.table('passengers').insert(pax_records).execute()
 
     # Update trip with metadata and status
     supabase.table('trips').update({
@@ -1018,6 +1023,23 @@ async def get_payment_info(request: Request, trip_id: str):
         "total_amount": agency_charges,
         "plan_name": "Agency Service Charges"
     }
+
+@api_router.put("/user/profile")
+async def update_user_profile(request: Request):
+    user = await get_current_user(request)
+    body = await request.json()
+    
+    # Allowed fields only (Email is read-only)
+    update_data = {}
+    for field in ['organization', 'phone', 'website', 'upi_id']:
+        if field in body:
+            update_data[field] = body[field]
+            
+    if not update_data:
+        return {"message": "No changes requested"}
+        
+    supabase.table('users').update(update_data).eq('user_id', user.user_id).execute()
+    return {"message": "Agency profile modernized"}
 
 @api_router.post("/trips/{trip_id}/confirm-payment")
 async def confirm_trip_payment(request: Request, trip_id: str, payload: PaymentConfirmInput):
