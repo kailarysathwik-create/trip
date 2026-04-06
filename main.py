@@ -428,23 +428,32 @@ async def create_trip(request: Request, details: TripDetails):
     
     trip_id = f"trip_{uuid.uuid4().hex[:12]}"
     
-    # Calculate end_date based on num_days
-    start_dt = datetime.fromisoformat(details.start_date.replace('Z', '+00:00'))
-    end_dt = start_dt + timedelta(days=details.num_days - 1)
-    
+    # Robust date parsing
+    try:
+        if 'T' in details.start_date:
+            start_dt = datetime.fromisoformat(details.start_date.replace('Z', '+00:00'))
+        else:
+            start_dt = datetime.strptime(details.start_date, "%Y-%m-%d")
+        end_dt = start_dt + timedelta(days=details.num_days - 1)
+        end_date_iso = end_dt.isoformat()
+    except Exception as e:
+        logging.error(f"Date parsing failed for {details.start_date}: {e}")
+        end_date_iso = details.start_date
+
     trip_doc = {
         "trip_id": trip_id,
         "user_id": user.user_id,
         "from_location": details.from_location,
         "destination": details.destination,
         "start_date": details.start_date,
-        "end_date": end_dt.isoformat(),
         "num_days": details.num_days,
         "num_people": details.num_people,
         "transport_mode": details.transport_mode,
         "status": "draft",
         "created_at": datetime.now(timezone.utc).isoformat()
     }
+    
+    # We do NOT insert end_date into the DB yet as the column may not exist in Supabase
     
     supabase.table('trips').insert(trip_doc).execute()
     
