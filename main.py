@@ -1052,9 +1052,11 @@ async def confirm_trip_payment(request: Request, trip_id: str, payload: PaymentC
     if not trip_check.data or len(trip_check.data) == 0:
         raise HTTPException(status_code=404, detail="Trip sequence not found in hub matrix")
 
-    # 1. Update Trip Status
+    # 1. Update Trip Status and Financial Metadata
     supabase.table('trips').update({
-        "status": "completed"
+        "status": "completed",
+        "total_amount": round(float(payload.total_amount or 0), 2),
+        "transaction_id": payload.transaction_id or f"TXN_{trip_id}"
     }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
     try:
@@ -1135,13 +1137,16 @@ async def get_trip(request: Request, trip_id: str):
     passengers_res = supabase.table('passengers').select('*').eq('trip_id', trip_id).execute()
     trip['tourists'] = passengers_res.data if passengers_res.data else []
     
-    # 3. Hydrate with Settlement Data
-    payment_res = supabase.table('payments').select('*').eq('trip_id', trip_id).order('created_at', desc=True).limit(1).execute()
-    if payment_res.data:
-        trip['total_amount'] = payment_res.data[0].get('total_amount', 0)
-        trip['transaction_id'] = payment_res.data[0].get('transaction_id', '')
-    else:
-        trip['total_amount'] = 0
+    # 3. Hydrate with Settlement Data (Prioritize hydrated fields if trips table has them)
+    if not trip.get('total_amount'):
+        payment_res = supabase.table('payments').select('*').eq('trip_id', trip_id).execute()
+        if payment_res.data:
+            # Sort by ID or time if possible, simple fallback
+            latest_pay = payment_res.data[-1] 
+            trip['total_amount'] = latest_pay.get('total_amount', 0)
+            trip['transaction_id'] = latest_pay.get('transaction_id', '')
+        else:
+            trip['total_amount'] = 0
     
     return trip
 
@@ -1181,12 +1186,14 @@ async def get_trips(request: Request):
     all_payments = supabase.table('payments').select('*').in_('trip_id', trip_ids).execute()
     pay_map = {p['trip_id']: p for p in (all_payments.data or [])}
     
-    # 3. Merge Data
+    # 3. Merge Data (Prioritize trips table fields if present)
     for t in trips:
         tid = t['trip_id']
         t['tourists'] = pax_map.get(tid, [])
-        t['total_amount'] = pay_map.get(tid, {}).get('total_amount', 0)
-        t['transaction_id'] = pay_map.get(tid, {}).get('transaction_id', '')
+        # If trips table misses financial data, fallback to payments map
+        if not t.get('total_amount'):
+            t['total_amount'] = pay_map.get(tid, {}).get('total_amount', 0)
+            t['transaction_id'] = pay_map.get(tid, {}).get('transaction_id', '')
         
     return trips
 
