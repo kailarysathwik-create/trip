@@ -1052,7 +1052,7 @@ async def confirm_trip_payment(request: Request, trip_id: str, payload: PaymentC
 
     # 1. Update Trip Status
     supabase.table('trips').update({
-        "status": "orchestrated"
+        "status": "completed"
     }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
     try:
