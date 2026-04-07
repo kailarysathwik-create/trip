@@ -1123,12 +1123,27 @@ async def finalize_trip(request: Request, trip_id: str):
 async def get_trip(request: Request, trip_id: str):
     user = await get_current_user(request)
     
+    # 1. Fetch Core Trip
     trip_response = supabase.table('trips').select('*').eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
     if not trip_response.data or len(trip_response.data) == 0:
         raise HTTPException(status_code=404, detail="Trip not found")
     
-    return trip_response.data[0]
+    trip = trip_response.data[0]
+    
+    # 2. Hydrate with Personnel Matrix
+    passengers_res = supabase.table('passengers').select('*').eq('trip_id', trip_id).execute()
+    trip['tourists'] = passengers_res.data if passengers_res.data else []
+    
+    # 3. Hydrate with Settlement Data
+    payment_res = supabase.table('payments').select('*').eq('trip_id', trip_id).order('created_at', desc=True).limit(1).execute()
+    if payment_res.data:
+        trip['total_amount'] = payment_res.data[0].get('total_amount', 0)
+        trip['transaction_id'] = payment_res.data[0].get('transaction_id', '')
+    else:
+        trip['total_amount'] = 0
+    
+    return trip
 
 
 @api_router.post("/trip/send-manifest")
@@ -1144,9 +1159,36 @@ async def send_trip_manifest(request: Request, payload: Dict[str, Any]):
 async def get_trips(request: Request):
     user = await get_current_user(request)
     
+    # 1. Fetch Core Trips
     trips_response = supabase.table('trips').select('*').eq('user_id', user.user_id).order('created_at', desc=True).execute()
+    trips = trips_response.data
     
-    return trips_response.data
+    if not trips:
+        return []
+    
+    # 2. Bulk Fetch Associated Data for Better Performance
+    trip_ids = [t['trip_id'] for t in trips]
+    
+    # Fetch all passengers for these trips
+    all_passengers = supabase.table('passengers').select('*').in_('trip_id', trip_ids).execute()
+    pax_map = {}
+    for p in (all_passengers.data or []):
+        tid = p['trip_id']
+        if tid not in pax_map: pax_map[tid] = []
+        pax_map[tid].append(p)
+        
+    # Fetch all payments for these trips
+    all_payments = supabase.table('payments').select('*').in_('trip_id', trip_ids).execute()
+    pay_map = {p['trip_id']: p for p in (all_payments.data or [])}
+    
+    # 3. Merge Data
+    for t in trips:
+        tid = t['trip_id']
+        t['tourists'] = pax_map.get(tid, [])
+        t['total_amount'] = pay_map.get(tid, {}).get('total_amount', 0)
+        t['transaction_id'] = pay_map.get(tid, {}).get('transaction_id', '')
+        
+    return trips
 
 origins = os.environ.get("CORS_ORIGINS")
 
