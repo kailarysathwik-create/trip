@@ -71,6 +71,9 @@ class OnboardingInput(BaseModel):
     website: Optional[str] = None
     upi_id: str
 
+class PNRStatusRequest(BaseModel):
+    pnr: str
+
 class TripDetails(BaseModel):
     from_location: str
     destination: str
@@ -135,6 +138,45 @@ class PaymentConfirmInput(BaseModel):
     secondary_phone: Optional[str] = None
     total_amount: float
     agency_charge: float
+
+@api_router.post("/fetch-pnr-status")
+async def fetch_pnr_status(request: PNRStatusRequest):
+    # EPHEMERAL PRODUCTION GATEWAY: pull secrets from Render env
+    pnr = request.pnr.strip()
+    api_key = os.getenv("RAPIDAPI_KEY")
+    api_host = os.getenv("RAPIDAPI_HOST", "real-time-pnr-status-api-for-indian-railways.p.rapidapi.com")
+
+    if not api_key:
+        # Fallback to simulation if key is not yet in Render env
+        return {"status": "Simulation", "message": "API Key Missing in Environment."}
+
+    # Calibrated to the high-fidelity /name/ entry point
+    url = f"https://{api_host}/name/{pnr}"
+    headers = {
+        "x-rapidapi-key": api_key,
+        "x-rapidapi-host": api_host
+    }
+
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=headers, timeout=15.0)
+            data = response.json()
+            
+            # The API usually returns "data": { "PassengerStatus": [...] }
+            # Adjusting to the specific "Real-Time PNR Status API" schema
+            p_data = data.get("data", {})
+            p_status = p_data.get("PassengerStatus", [])
+            
+            if not p_status:
+                 return {"status": "Unverified", "message": "No passenger data returned."}
+
+            return {
+                "status": "Verified",
+                "passengers": p_status, # List of {Number, BookingStatus, CurrentStatus, Coach, Berth}
+                "message": "Live Logistics Synchronized"
+            }
+    except Exception as e:
+        return {"status": "Error", "message": f"Handshake Refusal: {str(e)}"}
 
 # ============ Auth Helper ============
 
@@ -485,6 +527,9 @@ async def generate_itinerary(request: Request, trip_id: str):
     # ... (skipping some lines for brevity in match, but keeping logic)
     
     # Generate itinerary using AI
+    pnr = body.get('pnr_details', 'N/A')
+    stay_name = body.get('stay_name', 'N/A')
+    
     transport_mode = details.get('transport_mode', 'car').lower()
     vector_directive = ""
     if transport_mode == 'car':
@@ -505,6 +550,7 @@ CRITICAL RULES:
 4. Provide precise TIMINGS (e.g., 09:00 AM) for every activity.
 5. Include "Stay Timings" (Check-in/Check-out) and "Travel Details" (Local durations via {transport_mode}).
 6. INTEGRATE requested places to cover into the timeline naturally.
+7. CRITICAL: High-Fidelity Sync. Mention the technical identifiers: PNR/Flight: {pnr} and Primary HQ: {stay_name} in the relevant check-in/travel blocks.
 
 
 Return ONLY valid JSON in this format:
@@ -1136,17 +1182,17 @@ async def get_trip(request: Request, trip_id: str):
     # 2. Hydrate with Personnel Matrix
     passengers_res = supabase.table('passengers').select('*').eq('trip_id', trip_id).execute()
     trip['tourists'] = passengers_res.data if passengers_res.data else []
-    
-    # 3. Hydrate with Settlement Data (Prioritize hydrated fields if trips table has them)
+        # 3. Hydrate with Settlement Data (Prioritize hydrated fields if trips table has them)
     if not trip.get('total_amount'):
         payment_res = supabase.table('payments').select('*').eq('trip_id', trip_id).execute()
         if payment_res.data:
-            # Sort by ID or time if possible, simple fallback
+            # Safer fallback: Just take the last record without explicit sorting on missing column
             latest_pay = payment_res.data[-1] 
             trip['total_amount'] = latest_pay.get('total_amount', 0)
             trip['transaction_id'] = latest_pay.get('transaction_id', '')
         else:
             trip['total_amount'] = 0
+
     
     return trip
 
