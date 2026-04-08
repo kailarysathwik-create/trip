@@ -515,19 +515,16 @@ async def generate_itinerary(request: Request, trip_id: str):
     
     trip_doc = trip_response.data[0]
     details = get_trip_details(trip_doc)
-        # Enrich prompt with places_to_cover and actual booking data
-    places_to_cover = trip_doc.get("places_to_cover", "")
+    
+    # Robust extraction of potential missing columns
+    places_to_cover = trip_doc.get("places_to_cover") or ""
     places_context = f"STRICT: You MUST include these specific places in the plan: {places_to_cover}." if places_to_cover else ""
     
-    transport_info = ""
-    stays_info = ""
-    
     # Pull saved transport and stay selections from DB
-    selected_transport = trip_doc.get("selected_transport", {})
-    # ... (skipping some lines for brevity in match, but keeping logic)
+    selected_transport = trip_doc.get("selected_transport") or {}
     
-    # Generate itinerary using AI
-    onward_pnr = body.get('onward_pnr', 'N/A')
+    # Capture ephemeral PNRs from request body
+    onward_pnr = body.get('onward_pnr') or 'Hub Transit Protocol'
     return_pnr = body.get('return_pnr', 'N/A')
     stay_name = body.get('stay_name', 'N/A')
     
