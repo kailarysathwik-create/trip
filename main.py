@@ -527,7 +527,8 @@ async def generate_itinerary(request: Request, trip_id: str):
     # ... (skipping some lines for brevity in match, but keeping logic)
     
     # Generate itinerary using AI
-    pnr = body.get('pnr_details', 'N/A')
+    onward_pnr = body.get('onward_pnr', 'N/A')
+    return_pnr = body.get('return_pnr', 'N/A')
     stay_name = body.get('stay_name', 'N/A')
     
     transport_mode = details.get('transport_mode', 'car').lower()
@@ -550,7 +551,7 @@ CRITICAL RULES:
 4. Provide precise TIMINGS (e.g., 09:00 AM) for every activity.
 5. Include "Stay Timings" (Check-in/Check-out) and "Travel Details" (Local durations via {transport_mode}).
 6. INTEGRATE requested places to cover into the timeline naturally.
-7. CRITICAL: High-Fidelity Sync. Mention the technical identifiers: PNR/Flight: {pnr} and Primary HQ: {stay_name} in the relevant check-in/travel blocks.
+7. CRITICAL: Logistics Sync. Mention the technical identifiers: Onward Vector (Ref: {onward_pnr}), Return Vector (Ref: {return_pnr}), and Mission HQ: {stay_name} in the relevant check-in/travel blocks.
 
 
 Return ONLY valid JSON in this format:
