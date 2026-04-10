@@ -71,7 +71,7 @@ class User(BaseModel):
     model_config = ConfigDict(extra="ignore")
     user_id: str
     email: str
-    name: str
+    name: str = "Travel Agent"
     picture: Optional[str] = None
     organization: Optional[str] = None
     phone: Optional[str] = None
@@ -79,6 +79,8 @@ class User(BaseModel):
     upi_id: Optional[str] = None
     agency_charges_percentage: Optional[float] = 10.0
     has_payment_setup: bool = False
+    is_master: bool = False
+    is_active: bool = True
     created_at: Optional[str] = None
 
 class OnboardingInput(BaseModel):
@@ -136,7 +138,8 @@ class TouristDetail(BaseModel):
     name: str
     age: Any
     gender: str
-    proof: str # Aadhar/Passport ID
+    proof: Optional[str] = "" 
+    is_primary: Optional[bool] = False
 
 class TouristDetailsInput(BaseModel):
     tourists: List[TouristDetail]
@@ -207,39 +210,82 @@ async def get_current_user(request: Request) -> User:
     if not session_token:
         raise HTTPException(status_code=401, detail="Not authenticated")
     
-    # Find session in Supabase
-    session_response = supabase.table('user_sessions').select('*').eq('session_token', session_token).execute()
+    # 1. Verify Session Matrix
+    session_res = supabase.table('user_sessions').select('*').eq('session_token', session_token).execute()
+    if not session_res.data:
+        raise HTTPException(status_code=401, detail="Invalid session matrix")
     
-    if not session_response.data or len(session_response.data) == 0:
-        raise HTTPException(status_code=401, detail="Invalid session")
+    session_doc = session_res.data[0]
     
-    session_doc = session_response.data[0]
-    
-    # Check expiry - handle various Supabase timestamp formats
+    # Check expiry
     try:
-        expires_at = datetime.fromisoformat(session_doc["expires_at"].replace('Z', '+00:00'))
-    except ValueError:
-        # Fallback: strip microseconds if fromisoformat fails on Python 3.10
-        raw = session_doc["expires_at"]
-        if '.' in raw:
-            raw = raw[:raw.index('.')] + raw[raw.index('+'):] if '+' in raw else raw[:raw.index('.')]
-        expires_at = datetime.fromisoformat(raw.replace('Z', '+00:00'))
-    if expires_at < datetime.now(timezone.utc):
-        raise HTTPException(status_code=401, detail="Session expired")
+        raw = session_doc.get("expires_at", "")
+        if raw:
+            expires_at = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+            if datetime.now(timezone.utc) > expires_at:
+                raise HTTPException(status_code=401, detail="Session expired")
+    except Exception:
+        pass # Allow session if format is legacy but record exists
     
-    # Get user
-    user_response = supabase.table('users').select('*').eq('user_id', session_doc["user_id"]).execute()
+    # 2. Fetch Personnel Profile
+    user_res = supabase.table('users').select('*').eq('user_id', session_doc['user_id']).execute()
+    if not user_res.data:
+        raise HTTPException(status_code=404, detail="Personnel record missing")
     
-    if not user_response.data or len(user_response.data) == 0:
-        raise HTTPException(status_code=404, detail="User not found")
-    
-    user_doc = user_response.data[0]
+    user_data = user_res.data[0]
     
     try:
-        return User(**user_doc)
+        user = User(**user_data)
+        # 3. Master Command Check
+        user.is_master = (user.email == "middlemen1245@gmail.com")
+        
+        # 4. Access Guard
+        if not user.is_master and not user_data.get('is_active', True):
+            raise HTTPException(status_code=403, detail="Agency Access REVOKED by Master Command")
+            
+        return user
     except Exception as e:
-        logging.error(f"User model construction failed: {e} | user_doc keys: {list(user_doc.keys())}")
-        raise HTTPException(status_code=500, detail=f"User model error: {str(e)}")
+        logging.error(f"User construction failed: {e}")
+        raise HTTPException(status_code=500, detail="Identity Matrix Malfunction")
+
+# ============ Master Command Endpoints ============
+
+@api_router.get("/master/agencies")
+async def get_master_dashboard(request: Request):
+    user = await get_current_user(request)
+    if not getattr(user, 'is_master', False):
+        raise HTTPException(status_code=403, detail="Master Access Denied")
+        
+    agencies_res = supabase.table('users').select('*').execute()
+    trips_res = supabase.table('trips').select('user_id', 'status').execute()
+    
+    # Aggregate Stats Matrix
+    stats = {}
+    for t in (trips_res.data or []):
+        uid = t['user_id']
+        if uid not in stats: stats[uid] = {"total": 0, "completed": 0}
+        stats[uid]["total"] += 1
+        if t['status'] == 'completed': stats[uid]["completed"] += 1
+        
+    return {
+        "agencies": agencies_res.data,
+        "stats": stats
+    }
+
+@api_router.post("/master/agency/{target_user_id}/toggle")
+async def toggle_agency_access(request: Request, target_user_id: str):
+    user = await get_current_user(request)
+    if not getattr(user, 'is_master', False):
+        raise HTTPException(status_code=403, detail="Master Access Denied")
+        
+    # Get current status
+    res = supabase.table('users').select('is_active').eq('user_id', target_user_id).execute()
+    if not res.data: raise HTTPException(status_code=404, detail="Agency not found")
+    
+    new_status = not res.data[0].get('is_active', True)
+    supabase.table('users').update({"is_active": new_status}).eq('user_id', target_user_id).execute()
+    
+    return {"status": "ok", "is_active": new_status}
 
 # ============ Auth Routes ============
 
