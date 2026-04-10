@@ -1158,11 +1158,9 @@ async def confirm_trip_payment(request: Request, trip_id: str, payload: PaymentC
     if not trip_check.data or len(trip_check.data) == 0:
         raise HTTPException(status_code=404, detail="Trip sequence not found in hub matrix")
 
-    # 1. Update Trip Status and Financial Metadata
+    # 1. Update Trip Status
     supabase.table('trips').update({
-        "status": "completed",
-        "total_amount": round(float(payload.total_amount or 0), 2),
-        "transaction_id": payload.transaction_id or f"TXN_{trip_id}"
+        "status": "completed"
     }).eq('trip_id', trip_id).eq('user_id', user.user_id).execute()
     
     try:
