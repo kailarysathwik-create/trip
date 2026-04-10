@@ -33,6 +33,22 @@ DEST_ID_CACHE: Dict[str, str] = {}
 # Create the main app without a prefix
 app = FastAPI()
 
+# ============ CORS Configuration ============
+# Allow requests from the production Vercel frontend and local development
+origins = [
+    "https://yash-three-dusky.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
 
